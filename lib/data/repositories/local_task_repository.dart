@@ -5,6 +5,7 @@ import '../../domain/entities/task.dart' as domain;
 import '../../domain/repositories/task_repository.dart';
 import '../../domain/services/task_tree_rules.dart';
 import '../local/database.dart';
+import '../local/outbox_writer.dart';
 import '../mappers/task_mapper.dart';
 
 class LocalTaskRepository implements TaskRepository {
@@ -15,13 +16,13 @@ class LocalTaskRepository implements TaskRepository {
     String Function()? operationIdGenerator,
     TaskMapper mapper = const TaskMapper(),
   }) : _entityIdGenerator = entityIdGenerator ?? uuid.v4,
-       _operationIdGenerator = operationIdGenerator ?? uuid.v4,
-       _mapper = mapper;
+       _mapper = mapper,
+       _outbox = OutboxWriter(_database, operationIdGenerator ?? uuid.v4);
 
   final AppDatabase _database;
   final String Function() _entityIdGenerator;
-  final String Function() _operationIdGenerator;
   final TaskMapper _mapper;
+  final OutboxWriter _outbox;
 
   @override
   Stream<List<domain.Task>> watchTasks() =>
@@ -251,35 +252,15 @@ class LocalTaskRepository implements TaskRepository {
     required Set<String> changedFields,
   }) async {
     final nowUtc = DateTime.now().toUtc();
-    await _database
-        .into(_database.outboxOperations)
-        .insert(
-          OutboxOperationsCompanion.insert(
-            operationId: _operationIdGenerator(),
-            entityType: 'task',
-            entityId: task.id,
-            baseVersion: task.version,
-            payload: _mapper.encodeOperation(
-              task: task,
-              changedFields: changedFields,
-            ),
-            createdAtUtc: nowUtc,
-            nextAttemptAtUtc: nowUtc,
-          ),
-        );
-    final current = await (_database.select(
-      _database.syncStates,
-    )..where((table) => table.id.equals(1))).getSingleOrNull();
-    if (current == null) {
-      await _database
-          .into(_database.syncStates)
-          .insert(const SyncStatesCompanion(pendingCount: Value<int>(1)));
-    } else {
-      await (_database.update(
-        _database.syncStates,
-      )..where((table) => table.id.equals(1))).write(
-        SyncStatesCompanion(pendingCount: Value<int>(current.pendingCount + 1)),
-      );
-    }
+    await _outbox.enqueue(
+      entityType: 'task',
+      entityId: task.id,
+      baseVersion: task.version,
+      payload: <String, Object?>{
+        'changes': _mapper.toWire(task, fields: changedFields),
+        'changed_fields': changedFields.toList(growable: false)..sort(),
+      },
+      createdAtUtc: nowUtc,
+    );
   }
 }
