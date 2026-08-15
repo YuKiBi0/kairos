@@ -1,0 +1,11 @@
+{
+  "@@locale": "zh",
+  "appTitle": "Kairos",
+  "tasks": "任务",
+  "linkHealth": "链路健康",
+  "settings": "设置",
+  "newTask": "新建任务",
+  "searchTasks": "搜索标题和描述",
+  "save": "保存",
+  "cancel": "取消"
+}

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/entities/app_preferences.dart';
+import '../../domain/entities/task.dart';
+import '../../domain/entities/task_filter.dart';
 import '../../domain/repositories/settings_repository.dart';
 import '../../domain/services/task_sorter.dart';
 import '../local/database.dart';
@@ -40,6 +42,11 @@ class LocalSettingsRepository implements SettingsRepository {
       'scope': preferences.scope.name,
       'search_text': preferences.searchText,
       'always_on_top': preferences.alwaysOnTop,
+      'quadrants': preferences.quadrants
+          .map((quadrant) => quadrant.wireName)
+          .toList(growable: false),
+      'due_date_filter': preferences.dueDateFilter.name,
+      'has_unresolved_blockers': preferences.hasUnresolvedBlockers,
     }),
   );
 
@@ -104,6 +111,14 @@ class LocalSettingsRepository implements SettingsRepository {
         ),
         searchText: json['search_text'] as String? ?? '',
         alwaysOnTop: json['always_on_top'] as bool? ?? false,
+        quadrants: (json['quadrants'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>()
+            .map(TaskQuadrant.fromWireName)
+            .toSet(),
+        dueDateFilter: DueDateFilter.values.byName(
+          json['due_date_filter'] as String? ?? DueDateFilter.any.name,
+        ),
+        hasUnresolvedBlockers: json['has_unresolved_blockers'] as bool?,
       );
     } on Object {
       return const AppPreferences();
