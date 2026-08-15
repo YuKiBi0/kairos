@@ -2,6 +2,8 @@ import '../entities/blocker.dart';
 import '../entities/taxonomy.dart';
 
 abstract interface class MetadataRepository {
+  Stream<Map<String, int>> watchUnresolvedBlockerCounts();
+
   Stream<List<Blocker>> watchBlockers(String taskId);
 
   Future<Blocker> addBlocker(String taskId, String body);

@@ -21,6 +21,25 @@ class LocalMetadataRepository implements MetadataRepository {
   final OutboxWriter _outbox;
 
   @override
+  Stream<Map<String, int>> watchUnresolvedBlockerCounts() =>
+      (_database.select(_database.localBlockers)..where(
+            (table) =>
+                table.resolved.equals(false) & table.deletedAtUtc.isNull(),
+          ))
+          .watch()
+          .map((rows) {
+            final counts = <String, int>{};
+            for (final row in rows) {
+              counts.update(
+                row.taskId,
+                (value) => value + 1,
+                ifAbsent: () => 1,
+              );
+            }
+            return Map<String, int>.unmodifiable(counts);
+          });
+
+  @override
   Stream<List<domain.Blocker>> watchBlockers(String taskId) =>
       (_database.select(_database.localBlockers)
             ..where(
