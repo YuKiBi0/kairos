@@ -7,16 +7,19 @@ import (
 
 	"github.com/YuKiBi0/kairos/server/internal/auth"
 	"github.com/YuKiBi0/kairos/server/internal/config"
+	"github.com/YuKiBi0/kairos/server/internal/realtime"
 	"github.com/YuKiBi0/kairos/server/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
 type API struct {
-	store      *store.Store
-	tokens     *auth.TokenManager
-	refreshTTL time.Duration
-	logger     *slog.Logger
-	version    string
+	store           *store.Store
+	tokens          *auth.TokenManager
+	refreshTTL      time.Duration
+	logger          *slog.Logger
+	version         string
+	hub             *realtime.Hub
+	realtimeOrigins []string
 }
 
 func New(
@@ -26,11 +29,13 @@ func New(
 	version string,
 ) http.Handler {
 	api := &API{
-		store:      store,
-		tokens:     auth.NewTokenManager(config.SessionSecret, config.AccessTTL, "kairos-server"),
-		refreshTTL: config.RefreshTTL,
-		logger:     logger,
-		version:    version,
+		store:           store,
+		tokens:          auth.NewTokenManager(config.SessionSecret, config.AccessTTL, "kairos-server"),
+		refreshTTL:      config.RefreshTTL,
+		logger:          logger,
+		version:         version,
+		hub:             realtime.NewHub(),
+		realtimeOrigins: config.CORSOrigins,
 	}
 
 	router := chi.NewRouter()
@@ -46,6 +51,16 @@ func New(
 		v1.Group(func(protected chi.Router) {
 			protected.Use(api.authenticate)
 			protected.Get("/auth/me", api.me)
+			protected.Get("/sync/snapshot", api.snapshot)
+			protected.Get("/sync/changes", api.changes)
+			protected.Post("/sync/push", api.push)
+			protected.Get("/sync/status", api.syncStatus)
+			protected.Get("/realtime", api.realtime)
+			protected.Get("/tasks/{id}", api.taskDetail)
+			protected.Get("/tasks/{id}/descendants", api.taskDescendants)
+			protected.Get("/tags", api.taxonomyList("tag"))
+			protected.Get("/projects", api.taxonomyList("project"))
+			protected.Get("/checklist-groups", api.taxonomyList("checklist_group"))
 		})
 	})
 	return router
