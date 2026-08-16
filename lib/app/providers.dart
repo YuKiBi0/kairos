@@ -300,6 +300,9 @@ class WorkspaceController extends StateNotifier<AppPreferences> {
   void setAlwaysOnTop(bool value) =>
       _update(state.copyWith(alwaysOnTop: value));
 
+  void setCompactWorkspace(bool value) =>
+      _update(state.copyWith(compactWorkspace: value));
+
   void clearFilters() => _update(
     state.copyWith(
       quadrants: const <TaskQuadrant>{},

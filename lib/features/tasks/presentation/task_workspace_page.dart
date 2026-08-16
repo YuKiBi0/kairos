@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,6 +42,10 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
   Widget build(BuildContext context) {
     final preferences = ref.watch(workspaceControllerProvider);
     final items = ref.watch(visibleTaskItemsProvider);
+    final compactWorkspace =
+        !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.windows &&
+        preferences.compactWorkspace;
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
@@ -53,15 +58,16 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                _WorkspaceHeader(
-                  searchController: _searchController,
-                  preferences: preferences,
-                  onSearchChanged: ref
-                      .read(workspaceControllerProvider.notifier)
-                      .setSearchText,
-                  onCreate: _createTask,
-                  onShowFilters: _showFilters,
-                ),
+                if (!compactWorkspace)
+                  _WorkspaceHeader(
+                    searchController: _searchController,
+                    preferences: preferences,
+                    onSearchChanged: ref
+                        .read(workspaceControllerProvider.notifier)
+                        .setSearchText,
+                    onCreate: _createTask,
+                    onShowFilters: _showFilters,
+                  ),
                 Expanded(
                   child: items.when(
                     data: (values) => RefreshIndicator(
@@ -73,7 +79,8 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
                               children: <Widget>[
                                 SizedBox(
                                   height:
-                                      MediaQuery.sizeOf(context).height - 220,
+                                      MediaQuery.sizeOf(context).height -
+                                      (compactWorkspace ? 64 : 220),
                                   child: _EmptyWorkspace(onCreate: _createTask),
                                 ),
                               ],
@@ -89,11 +96,13 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
               ],
             ),
           ),
-          floatingActionButton: FloatingActionButton(
-            tooltip: '新建任务',
-            onPressed: _createTask,
-            child: const Icon(Icons.add),
-          ),
+          floatingActionButton: compactWorkspace
+              ? null
+              : FloatingActionButton(
+                  tooltip: '新建任务',
+                  onPressed: _createTask,
+                  child: const Icon(Icons.add),
+                ),
         ),
       ),
     );

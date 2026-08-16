@@ -42,6 +42,7 @@ class LocalSettingsRepository implements SettingsRepository {
       'scope': preferences.scope.name,
       'search_text': preferences.searchText,
       'always_on_top': preferences.alwaysOnTop,
+      'compact_workspace': preferences.compactWorkspace,
       'quadrants': preferences.quadrants
           .map((quadrant) => quadrant.wireName)
           .toList(growable: false),
@@ -124,6 +125,7 @@ class LocalSettingsRepository implements SettingsRepository {
         ),
         searchText: json['search_text'] as String? ?? '',
         alwaysOnTop: json['always_on_top'] as bool? ?? false,
+        compactWorkspace: json['compact_workspace'] as bool? ?? false,
         quadrants: (json['quadrants'] as List<dynamic>? ?? const <dynamic>[])
             .whereType<String>()
             .map(TaskQuadrant.fromWireName)

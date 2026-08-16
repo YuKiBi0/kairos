@@ -29,6 +29,7 @@ void main() {
         scope: TaskScope.today,
         searchText: 'report',
         alwaysOnTop: true,
+        compactWorkspace: true,
         quadrants: <TaskQuadrant>{TaskQuadrant.importantUrgent},
         statuses: <TaskStatus>{TaskStatus.inProgress},
         dueDateFilter: DueDateFilter.withDueDate,
@@ -46,6 +47,7 @@ void main() {
       expect(actual.scope, expected.scope);
       expect(actual.searchText, expected.searchText);
       expect(actual.alwaysOnTop, isTrue);
+      expect(actual.compactWorkspace, isTrue);
       expect(actual.quadrants, expected.quadrants);
       expect(actual.statuses, expected.statuses);
       expect(actual.dueDateFilter, expected.dueDateFilter);

@@ -13,6 +13,7 @@ class AppPreferences {
     this.scope = TaskScope.all,
     this.searchText = '',
     this.alwaysOnTop = false,
+    this.compactWorkspace = false,
     this.quadrants = const <TaskQuadrant>{},
     this.statuses = const <TaskStatus>{},
     this.dueDateFilter = DueDateFilter.any,
@@ -27,6 +28,7 @@ class AppPreferences {
   final TaskScope scope;
   final String searchText;
   final bool alwaysOnTop;
+  final bool compactWorkspace;
   final Set<TaskQuadrant> quadrants;
   final Set<TaskStatus> statuses;
   final DueDateFilter dueDateFilter;
@@ -41,6 +43,7 @@ class AppPreferences {
     TaskScope? scope,
     String? searchText,
     bool? alwaysOnTop,
+    bool? compactWorkspace,
     Set<TaskQuadrant>? quadrants,
     Set<TaskStatus>? statuses,
     DueDateFilter? dueDateFilter,
@@ -54,6 +57,7 @@ class AppPreferences {
     scope: scope ?? this.scope,
     searchText: searchText ?? this.searchText,
     alwaysOnTop: alwaysOnTop ?? this.alwaysOnTop,
+    compactWorkspace: compactWorkspace ?? this.compactWorkspace,
     quadrants: quadrants ?? this.quadrants,
     statuses: statuses ?? this.statuses,
     dueDateFilter: dueDateFilter ?? this.dueDateFilter,
