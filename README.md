@@ -1,17 +1,73 @@
-# kairos
+# Kairos
 
-A new Flutter project.
+> 凡事都有定期。
 
-## Getting Started
+**Kairos** 源自古希腊语。与表示连续、可计量的物理时间 **Chronos** 不同，Kairos 指向的是“恰当的关键时机”：在对的时候，做对的事。
 
-This project is a starting point for a Flutter application.
+Kairos 是一款面向 Windows 和 Android 的离线优先个人任务管理应用。它把任务的轻重缓急、行动层级和推进障碍放在同一个工作空间中，帮助你从“记住所有事情”转向“看清此刻最值得做的事情”。
 
-A few resources to get you started if this is your first Flutter project:
+## 应用理念
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+时间管理不只是把事项塞进日历，也是在有限的注意力中做出选择。Kairos 围绕三个问题组织任务：
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- **现在重要的是什么？** 用四象限区分重要性与紧迫性。
+- **下一步具体做什么？** 用任务树把目标拆成可以执行的小步骤。
+- **是什么阻碍了推进？** 单独记录困难点，让停滞的原因保持可见。
+
+所有操作都会先保存在本机。即使没有网络，你仍然可以记录、整理和完成任务；需要跨设备使用时，再连接自己部署的同步服务。
+
+## 功能介绍
+
+### 用三种视图看同一组任务
+
+- **列表视图**适合快速浏览和处理日常事项。
+- **任务树视图**展示父子关系，支持最多五层拆解、同级排序和任务移动，并汇总子任务完成进度。
+- **四象限视图**按照“重要 / 紧急”两个维度分布任务，帮助判断行动优先级。
+
+三种视图共享同一份任务数据，可以随时切换，不需要重复维护。
+
+### 记录任务所需的上下文
+
+每个任务可以设置标题、描述、截止时间和状态，并归入四象限。你还可以通过以下方式补充上下文：
+
+- 使用**标签**标记主题或场景；
+- 使用**项目**聚合围绕同一目标的任务；
+- 使用**清单分组**整理具有相同步骤或用途的事项；
+- 使用**推进困难点**记录阻塞原因，并在解决后保留处理状态。
+
+### 搜索、筛选与聚焦
+
+Kairos 支持按标题和描述搜索，并可结合任务范围、状态、象限、截止时间、困难点、标签、项目和清单分组进行筛选。无论当前使用列表、任务树还是四象限视图，都能沿用相同的筛选条件。
+
+### 在任务变化时持续整理
+
+- 快速完成或重新打开任务；
+- 调整父子关系和同级顺序；
+- 查看任务路径、子任务进度和未解决的困难点；
+- 删除后即时撤销，避免误操作；
+- 将本地数据导出为 JSON，便于个人留存。
+
+### 离线优先与跨设备同步
+
+任务始终先写入本地数据库，断网不会中断日常使用。配置自部署服务后，Windows 和 Android 设备可以在网络恢复时继续同步。
+
+当同一字段在不同设备上被分别修改时，Kairos 会显示冲突并让你选择保留本地内容或采用服务端内容，不会静默覆盖。链路健康页面还会展示连接状态、最近同步结果、待上传操作和脱敏诊断信息，方便确认数据是否已经同步。
+
+### 针对不同设备优化
+
+- **Windows**：适配宽屏工作空间，提供自定义标题栏、窗口置顶和紧凑模式。
+- **Android**：适配窄屏操作，支持下拉同步，便于随时记录和查看任务。
+
+## 适合谁使用
+
+Kairos 适合希望在手机上随手记录、在电脑上集中整理，并愿意自行掌控服务端与数据的个人用户。当前版本以个人单用户场景为核心，不提供团队协作或公共云服务；完整范围请查看[已知限制](docs/known-limitations.md)。
+
+## 工程文档
+
+构建、部署、接口和维护等工程化内容统一放在 `docs/` 目录：
+
+- [客户端构建](docs/build.md)
+- [服务端部署与运维](docs/deployment.md)
+- [API v1](docs/api.md)
+- [API 变更记录](docs/api-changelog.md)
+- [MVP 已知限制](docs/known-limitations.md)

@@ -13,6 +13,19 @@
 migrate_working_dir/
 .codex
 
+# Local configuration and credentials. Keep examples explicitly trackable.
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+credentials.json
+secrets.json
+
 # IntelliJ related
 *.iml
 *.ipr
