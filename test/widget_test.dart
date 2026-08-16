@@ -50,7 +50,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('Kairos'), findsWidgets);
-    expect(find.text('现在最该推进什么'), findsOneWidget);
+    expect(find.text('凡事都有定期'), findsOneWidget);
     expect(find.text('新建'), findsOneWidget);
   });
 }
