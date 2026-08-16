@@ -1,0 +1,486 @@
+import 'dart:async';
+
+import 'package:drift/drift.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../core/platform/windows_window_service.dart';
+import '../core/security/secure_credential_store.dart';
+import '../data/export/json_export_service.dart';
+import '../data/local/database.dart' hide HealthEvent;
+import '../data/remote/kairos_api.dart';
+import '../data/remote/realtime_socket.dart';
+import '../data/repositories/local_metadata_repository.dart';
+import '../data/repositories/local_settings_repository.dart';
+import '../data/repositories/local_task_repository.dart';
+import '../data/sync/sync_engine.dart';
+import '../domain/entities/app_preferences.dart';
+import '../domain/entities/blocker.dart';
+import '../domain/entities/realtime_status.dart';
+import '../domain/entities/task.dart';
+import '../domain/entities/task_filter.dart';
+import '../domain/entities/taxonomy.dart';
+import '../domain/repositories/metadata_repository.dart';
+import '../domain/repositories/settings_repository.dart';
+import '../domain/repositories/task_repository.dart';
+import '../domain/services/task_sorter.dart';
+import '../domain/services/task_tree_rules.dart';
+import '../features/sync/application/auth_controller.dart';
+import '../features/sync/application/realtime_controller.dart';
+import '../features/sync/application/sync_controller.dart';
+
+final databaseProvider = Provider<AppDatabase>((ref) {
+  final database = AppDatabase.open();
+  ref.onDispose(database.close);
+  return database;
+});
+
+final taskRepositoryProvider = Provider<TaskRepository>(
+  (ref) => LocalTaskRepository(ref.watch(databaseProvider)),
+);
+
+final metadataRepositoryProvider = Provider<MetadataRepository>(
+  (ref) => LocalMetadataRepository(ref.watch(databaseProvider)),
+);
+
+final settingsRepositoryProvider = Provider<SettingsRepository>(
+  (ref) => LocalSettingsRepository(ref.watch(databaseProvider)),
+);
+
+final windowsWindowServiceProvider = Provider<WindowsWindowService>(
+  (ref) => const WindowsWindowService(),
+);
+
+final credentialStoreProvider = Provider<CredentialStore>(
+  (ref) => const SecureCredentialStore(),
+);
+
+final kairosApiProvider = Provider<KairosApi>((ref) => KairosApi());
+
+final realtimeConnectorProvider = Provider<RealtimeConnector>(
+  (ref) => const IoRealtimeConnector(),
+);
+
+final networkMonitorProvider = Provider<NetworkMonitor>(
+  (ref) => ConnectivityNetworkMonitor(),
+);
+
+final jsonExportServiceProvider = Provider<JsonExportService>(
+  (ref) => JsonExportService(database: ref.watch(databaseProvider)),
+);
+
+final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
+  (ref) => AuthController(
+    settings: ref.watch(settingsRepositoryProvider),
+    credentials: ref.watch(credentialStoreProvider),
+    api: ref.watch(kairosApiProvider),
+  ),
+);
+
+final syncEngineProvider = Provider<SyncEngine>(
+  (ref) => SyncEngine(
+    database: ref.watch(databaseProvider),
+    api: ref.watch(kairosApiProvider),
+    auth: ref.watch(authControllerProvider.notifier),
+    settings: ref.watch(settingsRepositoryProvider),
+  ),
+);
+
+final syncControllerProvider =
+    StateNotifierProvider<SyncController, SyncControllerState>(
+      (ref) => SyncController(ref.watch(syncEngineProvider)),
+    );
+
+final localSyncStateProvider = StreamProvider<SyncState?>((ref) {
+  final database = ref.watch(databaseProvider);
+  return (database.select(
+    database.syncStates,
+  )..where((table) => table.id.equals(1))).watchSingleOrNull();
+});
+
+final syncConflictsProvider = StreamProvider<List<SyncConflict>>((ref) {
+  final database = ref.watch(databaseProvider);
+  return (database.select(database.syncConflicts)
+        ..where((table) => table.resolvedAtUtc.isNull())
+        ..orderBy(<OrderingTerm Function(SyncConflicts)>[
+          (table) => OrderingTerm.desc(table.createdAtUtc),
+        ]))
+      .watch();
+});
+
+final workspaceControllerProvider =
+    StateNotifierProvider<WorkspaceController, AppPreferences>(
+      (ref) => WorkspaceController(ref.watch(settingsRepositoryProvider)),
+    );
+
+final tasksProvider = StreamProvider<List<Task>>(
+  (ref) => ref.watch(taskRepositoryProvider).watchTasks(),
+);
+
+final unresolvedBlockerCountsProvider = StreamProvider<Map<String, int>>(
+  (ref) => ref.watch(metadataRepositoryProvider).watchUnresolvedBlockerCounts(),
+);
+
+final blockersProvider = StreamProvider.family<List<Blocker>, String>(
+  (ref, taskId) => ref.watch(metadataRepositoryProvider).watchBlockers(taskId),
+);
+
+final tagsProvider = StreamProvider<List<Tag>>(
+  (ref) => ref.watch(metadataRepositoryProvider).watchTags(),
+);
+
+final projectsProvider = StreamProvider<List<Project>>(
+  (ref) => ref.watch(metadataRepositoryProvider).watchProjects(),
+);
+
+final checklistGroupsProvider = StreamProvider<List<ChecklistGroup>>(
+  (ref) => ref.watch(metadataRepositoryProvider).watchChecklistGroups(),
+);
+
+final deviceIdProvider = FutureProvider<String>(
+  (ref) => ref.watch(settingsRepositoryProvider).getOrCreateDeviceId(),
+);
+
+final realtimeStatusProvider = StateProvider<RealtimeStatus>(
+  (ref) => const RealtimeStatus.unconfigured(),
+);
+
+final healthEventsProvider = StateProvider<List<HealthEvent>>(
+  (ref) => const <HealthEvent>[],
+);
+
+final realtimeControllerProvider = Provider<RealtimeController>((ref) {
+  final controller = RealtimeController(
+    settings: ref.watch(settingsRepositoryProvider),
+    auth: ref.watch(authControllerProvider.notifier),
+    connector: ref.watch(realtimeConnectorProvider),
+    network: ref.watch(networkMonitorProvider),
+    synchronize: ref.watch(syncEngineProvider).synchronize,
+    onStatus: (status) {
+      ref.read(realtimeStatusProvider.notifier).state = status;
+    },
+    onEvents: (events) {
+      ref.read(healthEventsProvider.notifier).state = events;
+    },
+  );
+  ref
+    ..listen<AuthState>(
+      authControllerProvider,
+      (previous, next) => controller.authStateChanged(next),
+      fireImmediately: true,
+    )
+    ..listen<AsyncValue<SyncState?>>(localSyncStateProvider, (previous, next) {
+      next.whenData((syncState) {
+        if (syncState != null) {
+          controller.localSyncStateChanged(
+            cursor: syncState.serverCursor,
+            pending: syncState.pendingCount,
+          );
+        }
+      });
+    })
+    ..onDispose(() => unawaited(controller.dispose()));
+  return controller;
+});
+
+final realtimeActionsProvider = Provider<RealtimeActions>(
+  (ref) => ref.watch(realtimeControllerProvider),
+);
+
+final visibleTaskItemsProvider = Provider<AsyncValue<List<TaskListItem>>>((
+  ref,
+) {
+  final tasks = ref.watch(tasksProvider);
+  final blockerCounts = ref.watch(unresolvedBlockerCountsProvider);
+  final preferences = ref.watch(workspaceControllerProvider);
+  final tagValues = ref
+      .watch(tagsProvider)
+      .when(
+        data: (value) => value,
+        error: (_, _) => const <Tag>[],
+        loading: () => const <Tag>[],
+      );
+  final projectValues = ref
+      .watch(projectsProvider)
+      .when(
+        data: (value) => value,
+        error: (_, _) => const <Project>[],
+        loading: () => const <Project>[],
+      );
+  final groupValues = ref
+      .watch(checklistGroupsProvider)
+      .when(
+        data: (value) => value,
+        error: (_, _) => const <ChecklistGroup>[],
+        loading: () => const <ChecklistGroup>[],
+      );
+
+  return tasks.when(
+    data: (taskValues) => blockerCounts.when(
+      data: (counts) => AsyncValue<List<TaskListItem>>.data(
+        _projectTasks(
+          taskValues,
+          counts,
+          preferences,
+          tagValues,
+          projectValues,
+          groupValues,
+        ),
+      ),
+      error: AsyncValue<List<TaskListItem>>.error,
+      loading: AsyncValue<List<TaskListItem>>.loading,
+    ),
+    error: AsyncValue<List<TaskListItem>>.error,
+    loading: AsyncValue<List<TaskListItem>>.loading,
+  );
+});
+
+class WorkspaceController extends StateNotifier<AppPreferences> {
+  WorkspaceController(this._settings) : super(const AppPreferences()) {
+    unawaited(_hydrate());
+  }
+
+  final SettingsRepository _settings;
+  Timer? _searchSaveTimer;
+
+  Future<void> _hydrate() async {
+    state = await _settings.loadPreferences();
+  }
+
+  void setViewMode(TaskViewMode value) =>
+      _update(state.copyWith(viewMode: value));
+
+  void setSortMode(TaskSortMode value) =>
+      _update(state.copyWith(sortMode: value));
+
+  void setScope(TaskScope value) => _update(state.copyWith(scope: value));
+
+  void setSearchText(String value) {
+    state = state.copyWith(searchText: value);
+    _searchSaveTimer?.cancel();
+    _searchSaveTimer = Timer(
+      const Duration(milliseconds: 250),
+      () => unawaited(_settings.savePreferences(state)),
+    );
+  }
+
+  void toggleQuadrant(TaskQuadrant quadrant) {
+    final selected = <TaskQuadrant>{...state.quadrants};
+    selected.contains(quadrant)
+        ? selected.remove(quadrant)
+        : selected.add(quadrant);
+    _update(
+      state.copyWith(quadrants: Set<TaskQuadrant>.unmodifiable(selected)),
+    );
+  }
+
+  void toggleStatus(TaskStatus status) {
+    final selected = <TaskStatus>{...state.statuses};
+    selected.contains(status) ? selected.remove(status) : selected.add(status);
+    _update(state.copyWith(statuses: Set<TaskStatus>.unmodifiable(selected)));
+  }
+
+  void setDueDateFilter(DueDateFilter value) =>
+      _update(state.copyWith(dueDateFilter: value));
+
+  void setBlockerFilter(bool? value) =>
+      _update(state.copyWith(hasUnresolvedBlockers: value));
+
+  void toggleTag(String tagId) {
+    final selected = <String>{...state.tagIds};
+    selected.contains(tagId) ? selected.remove(tagId) : selected.add(tagId);
+    _update(state.copyWith(tagIds: Set<String>.unmodifiable(selected)));
+  }
+
+  void setProjectFilter(String? projectId) =>
+      _update(state.copyWith(projectId: projectId));
+
+  void setChecklistGroupFilter(String? checklistGroupId) =>
+      _update(state.copyWith(checklistGroupId: checklistGroupId));
+
+  void setAlwaysOnTop(bool value) =>
+      _update(state.copyWith(alwaysOnTop: value));
+
+  void setCompactWorkspace(bool value) =>
+      _update(state.copyWith(compactWorkspace: value));
+
+  void clearFilters() => _update(
+    state.copyWith(
+      quadrants: const <TaskQuadrant>{},
+      statuses: const <TaskStatus>{},
+      dueDateFilter: DueDateFilter.any,
+      hasUnresolvedBlockers: null,
+      tagIds: const <String>{},
+      projectId: null,
+      checklistGroupId: null,
+    ),
+  );
+
+  void _update(AppPreferences value) {
+    state = value;
+    unawaited(_settings.savePreferences(value));
+  }
+
+  @override
+  void dispose() {
+    _searchSaveTimer?.cancel();
+    super.dispose();
+  }
+}
+
+class TaskActions {
+  const TaskActions(this._tasks, this._settings);
+
+  final TaskRepository _tasks;
+  final SettingsRepository _settings;
+
+  Future<Task> create({
+    required String title,
+    String? description,
+    TaskQuadrant quadrant = TaskQuadrant.importantNotUrgent,
+    TaskStatus status = TaskStatus.notStarted,
+    DateTime? dueAtUtc,
+    String? parentId,
+    Set<String> tagIds = const <String>{},
+    String? projectId,
+    String? checklistGroupId,
+  }) async {
+    final deviceId = await _settings.getOrCreateDeviceId();
+    return _tasks.createTask(
+      title: title,
+      description: description,
+      quadrant: quadrant,
+      status: status,
+      dueAtUtc: dueAtUtc,
+      parentId: parentId,
+      tagIds: tagIds,
+      projectId: projectId,
+      checklistGroupId: checklistGroupId,
+      deviceId: deviceId,
+    );
+  }
+
+  Future<Task> save(Task task, Set<String> changedFields) =>
+      _tasks.saveTask(task, changedFields: changedFields);
+
+  Future<void> toggleCompleted(Task task) async {
+    final next = task.status.isCompleted
+        ? TaskStatus.inProgress
+        : TaskStatus.completed;
+    await _tasks.saveTask(
+      task.copyWith(status: next),
+      changedFields: const <String>{'status'},
+    );
+  }
+
+  Future<void> delete(Task task) =>
+      _tasks.softDeleteTask(task.id, DateTime.now().toUtc());
+
+  Future<void> restore(Task task) =>
+      _tasks.restoreTask(task.id, DateTime.now().toUtc());
+
+  Future<void> move({
+    required Task task,
+    required String? targetParentId,
+    required int targetSortOrder,
+  }) => _tasks.moveTask(
+    taskId: task.id,
+    targetParentId: targetParentId,
+    targetSortOrder: targetSortOrder,
+    nowUtc: DateTime.now().toUtc(),
+  );
+}
+
+final taskActionsProvider = Provider<TaskActions>(
+  (ref) => TaskActions(
+    ref.watch(taskRepositoryProvider),
+    ref.watch(settingsRepositoryProvider),
+  ),
+);
+
+List<TaskListItem> _projectTasks(
+  List<Task> tasks,
+  Map<String, int> blockerCounts,
+  AppPreferences preferences,
+  List<Tag> tags,
+  List<Project> projects,
+  List<ChecklistGroup> groups,
+) {
+  final active = tasks.where((task) => !task.isDeleted).toList(growable: false);
+  final byId = <String, Task>{for (final task in active) task.id: task};
+  final tree = TaskTreeRules(active);
+  final tagNames = <String, String>{for (final tag in tags) tag.id: tag.name};
+  final projectNames = <String, String>{
+    for (final project in projects) project.id: project.name,
+  };
+  final groupNames = <String, String>{
+    for (final group in groups) group.id: group.name,
+  };
+  final filter = TaskFilter(
+    searchText: preferences.searchText,
+    quadrants: preferences.quadrants,
+    statuses: preferences.statuses,
+    dueDate: preferences.dueDateFilter,
+    hasUnresolvedBlockers: preferences.hasUnresolvedBlockers,
+    tagIds: preferences.tagIds,
+    projectId: preferences.projectId,
+    checklistGroupId: preferences.checklistGroupId,
+  );
+  final now = DateTime.now();
+  final items = <TaskListItem>[];
+  for (final task in active) {
+    if (task.status == TaskStatus.archived ||
+        !_matchesScope(task, preferences.scope, now)) {
+      continue;
+    }
+    final progress = tree.progressFor(task.id);
+    final item = TaskListItem(
+      task: task,
+      completedDescendantCount: progress.completed,
+      totalDescendantCount: progress.total,
+      unresolvedBlockerCount: blockerCounts[task.id] ?? 0,
+      parentPath: _parentPath(task, byId),
+      tagNames: task.tagIds
+          .map((id) => tagNames[id])
+          .whereType<String>()
+          .toList(growable: false),
+      projectName: projectNames[task.projectId],
+      checklistGroupName: groupNames[task.checklistGroupId],
+    );
+    if (filter.matches(item)) {
+      items.add(item);
+    }
+  }
+  return const TaskSorter().sort(items, mode: preferences.sortMode, now: now);
+}
+
+bool _matchesScope(Task task, TaskScope scope, DateTime now) {
+  final due = task.dueAtUtc?.toLocal();
+  return switch (scope) {
+    TaskScope.all => true,
+    TaskScope.completed => task.status.isCompleted,
+    TaskScope.overdue =>
+      !task.status.isCompleted && due != null && due.isBefore(now.toLocal()),
+    TaskScope.today =>
+      !task.status.isCompleted && due != null && _sameDay(due, now.toLocal()),
+  };
+}
+
+bool _sameDay(DateTime left, DateTime right) =>
+    left.year == right.year &&
+    left.month == right.month &&
+    left.day == right.day;
+
+List<String> _parentPath(Task task, Map<String, Task> byId) {
+  final path = <String>[];
+  final visited = <String>{task.id};
+  var parentId = task.parentId;
+  while (parentId != null && visited.add(parentId)) {
+    final parent = byId[parentId];
+    if (parent == null) {
+      break;
+    }
+    path.insert(0, parent.title);
+    parentId = parent.parentId;
+  }
+  return List<String>.unmodifiable(path);
+}

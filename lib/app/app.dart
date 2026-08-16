@@ -1,0 +1,99 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../core/platform/windows_window_service.dart';
+import '../domain/entities/app_preferences.dart';
+import '../l10n/generated/app_localizations.dart';
+import 'providers.dart';
+import 'router.dart';
+import 'theme/organic_theme.dart';
+
+class KairosApp extends ConsumerStatefulWidget {
+  const KairosApp({super.key});
+
+  @override
+  ConsumerState<KairosApp> createState() => _KairosAppState();
+}
+
+class _KairosAppState extends ConsumerState<KairosApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(ref.read(realtimeActionsProvider).synchronizeNow());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.watch(realtimeControllerProvider);
+    ref.listen<AppPreferences>(
+      workspaceControllerProvider,
+      (previous, next) => unawaited(
+        _restoreWindowPreference(
+          ref.read(windowsWindowServiceProvider),
+          next.alwaysOnTop,
+        ),
+      ),
+    );
+    final theme = kairosThemeForPlatform(
+      isWeb: kIsWeb,
+      platform: defaultTargetPlatform,
+    );
+    return MaterialApp.router(
+      title: 'Kairos',
+      debugShowCheckedModeBanner: false,
+      theme: theme,
+      routerConfig: appRouter,
+      locale: const Locale('zh'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+    );
+  }
+}
+
+@visibleForTesting
+ThemeData kairosThemeForPlatform({
+  required bool isWeb,
+  required TargetPlatform platform,
+}) {
+  if (isWeb || platform != TargetPlatform.windows) {
+    return OrganicTheme.light;
+  }
+  // Flutter 3.41 can crash the Windows AXTree when hover-triggered tooltip
+  // overlays are grafted into a scrollable semantics tree. Keep RawTooltip
+  // semantics, but prevent automatic overlays.
+  return OrganicTheme.light.copyWith(
+    tooltipTheme: OrganicTheme.light.tooltipTheme.copyWith(
+      triggerMode: TooltipTriggerMode.manual,
+      waitDuration: const Duration(days: 365),
+    ),
+  );
+}
+
+Future<void> _restoreWindowPreference(
+  WindowsWindowService service,
+  bool alwaysOnTop,
+) async {
+  try {
+    await service.setAlwaysOnTop(alwaysOnTop);
+  } on PlatformException {
+    // The settings page surfaces platform failures during direct user actions.
+  }
+}

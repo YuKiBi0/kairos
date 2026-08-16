@@ -1,0 +1,30 @@
+[Unit]
+Description=Kairos task synchronization server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kairos
+Group=kairos
+WorkingDirectory=/opt/kairos
+ExecStart=/opt/kairos/bin/kairos-server --env-file /etc/kairos/kairos.env serve
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+UMask=0027
+LimitNOFILE=8192
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target
