@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,16 +52,39 @@ class _KairosAppState extends ConsumerState<KairosApp>
         ),
       ),
     );
+    final theme = kairosThemeForPlatform(
+      isWeb: kIsWeb,
+      platform: defaultTargetPlatform,
+    );
     return MaterialApp.router(
       title: 'Kairos',
       debugShowCheckedModeBanner: false,
-      theme: OrganicTheme.light,
+      theme: theme,
       routerConfig: appRouter,
       locale: const Locale('zh'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
     );
   }
+}
+
+@visibleForTesting
+ThemeData kairosThemeForPlatform({
+  required bool isWeb,
+  required TargetPlatform platform,
+}) {
+  if (isWeb || platform != TargetPlatform.windows) {
+    return OrganicTheme.light;
+  }
+  // Flutter 3.41 can crash the Windows AXTree when hover-triggered tooltip
+  // overlays are grafted into a scrollable semantics tree. Keep RawTooltip
+  // semantics, but prevent automatic overlays.
+  return OrganicTheme.light.copyWith(
+    tooltipTheme: OrganicTheme.light.tooltipTheme.copyWith(
+      triggerMode: TooltipTriggerMode.manual,
+      waitDuration: const Duration(days: 365),
+    ),
+  );
 }
 
 Future<void> _restoreWindowPreference(

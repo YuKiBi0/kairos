@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos/app/app.dart';
@@ -7,6 +8,26 @@ import 'package:kairos/domain/entities/task.dart';
 import 'package:kairos/domain/repositories/settings_repository.dart';
 
 void main() {
+  test('prevents automatic tooltip overlays only on native Windows', () {
+    final windowsTheme = kairosThemeForPlatform(
+      isWeb: false,
+      platform: TargetPlatform.windows,
+    );
+    final webTheme = kairosThemeForPlatform(
+      isWeb: true,
+      platform: TargetPlatform.windows,
+    );
+    final androidTheme = kairosThemeForPlatform(
+      isWeb: false,
+      platform: TargetPlatform.android,
+    );
+
+    expect(windowsTheme.tooltipTheme.triggerMode, TooltipTriggerMode.manual);
+    expect(windowsTheme.tooltipTheme.waitDuration, const Duration(days: 365));
+    expect(webTheme.tooltipTheme.triggerMode, isNull);
+    expect(androidTheme.tooltipTheme.triggerMode, isNull);
+  });
+
   testWidgets('starts the Kairos task workspace', (tester) async {
     final settings = _MemorySettingsRepository();
 
