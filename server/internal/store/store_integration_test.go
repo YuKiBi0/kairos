@@ -25,6 +25,10 @@ func TestAuthenticationPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	apiVersion, err := database.APIVersion(ctx)
+	if err != nil || apiVersion != "v1" {
+		t.Fatalf("unexpected schema API version: %q err=%v", apiVersion, err)
+	}
 
 	username := "integration-" + uuid.NewString()
 	passwordHash, err := auth.HashPassword("integration password 123")

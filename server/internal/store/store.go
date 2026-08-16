@@ -60,6 +60,17 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
+func (s *Store) APIVersion(ctx context.Context) (string, error) {
+	var version string
+	if err := s.pool.QueryRow(
+		ctx,
+		`SELECT value FROM schema_metadata WHERE key = 'api_version'`,
+	).Scan(&version); err != nil {
+		return "", fmt.Errorf("read schema metadata: %w", err)
+	}
+	return version, nil
+}
+
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (User, error) {
 	user := User{ID: uuid.New(), Username: username, PasswordHash: passwordHash}
 	err := s.pool.QueryRow(

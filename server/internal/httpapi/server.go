@@ -76,13 +76,22 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "数据库尚未就绪")
 		return
 	}
+	apiVersion, err := a.store.APIVersion(ctx)
+	if err != nil || apiVersion != "v1" {
+		writeError(w, r, http.StatusServiceUnavailable, "MIGRATION_REQUIRED", "数据库迁移尚未完成")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (a *API) versionInfo(w http.ResponseWriter, r *http.Request) {
+	apiVersion, err := a.store.APIVersion(r.Context())
+	if err != nil {
+		apiVersion = "unknown"
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"service_version":   a.version,
-		"api_version":       "v1",
+		"api_version":       apiVersion,
 		"migration_version": "1",
 	})
 }

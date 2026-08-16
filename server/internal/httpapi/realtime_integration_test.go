@@ -61,6 +61,10 @@ func TestRealtimeHintTriggersHTTPChanges(t *testing.T) {
 	}, logger, "test")
 	server := httptest.NewServer(handler)
 	defer server.Close()
+	readyResponse := requestJSON(t, http.MethodGet, server.URL+"/readyz", "", nil)
+	if readyResponse["status"] != "ready" {
+		t.Fatalf("unexpected readiness response: %#v", readyResponse)
+	}
 
 	loginPayload := map[string]any{
 		"username": username,
