@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^2.6.1
   drift: 2.31.0
+  # Bundles SQLite for Android/iOS/Linux when using drift/native.dart.
+  sqlite3_flutter_libs: ^0.5.41
   path_provider: ^2.1.6
   path: ^1.9.1
   uuid: ^4.6.0
