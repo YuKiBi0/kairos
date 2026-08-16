@@ -274,6 +274,25 @@ class _EndpointInfo extends StatelessWidget {
                 ? '连接已加密'
                 : 'WS 连接未加密',
           ),
+          if (endpoint?.scheme == 'ws') ...<Widget>[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: KairosColors.clay.withValues(alpha: 0.12),
+                border: Border.all(color: KairosColors.clay),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(Icons.warning_amber_rounded, color: KairosColors.clay),
+                  SizedBox(width: 8),
+                  Expanded(child: Text('连接未加密；WS 仅用于可信局域网，公网请改用 HTTPS/WSS。')),
+                ],
+              ),
+            ),
+          ],
           _MetricRow(label: '当前会话重连', value: '${status.reconnectCount} 次'),
           _MetricRow(
             label: '心跳结果',

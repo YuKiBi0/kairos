@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/theme/organic_theme.dart';
+import '../../../data/local/database.dart';
+import '../../../data/sync/sync_engine.dart';
 import '../../../domain/entities/taxonomy.dart';
 import '../../sync/application/auth_controller.dart';
 import '../../sync/application/sync_controller.dart';
@@ -194,6 +198,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ],
                   ),
           ),
+          conflicts.when(
+            data: (items) => items.isEmpty
+                ? const SizedBox.shrink()
+                : _SettingsSection(
+                    title: '同步冲突',
+                    description: '同一字段在多个设备被修改，请明确选择要保留的版本。',
+                    child: _ConflictList(conflicts: items),
+                  ),
+            error: (error, _) =>
+                _SettingsSection(title: '同步冲突', child: Text('无法读取冲突：$error')),
+            loading: () => const SizedBox.shrink(),
+          ),
           if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
             _SettingsSection(
               title: 'Windows 窗口',
@@ -211,7 +227,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: OutlinedButton.icon(
-                onPressed: () {},
+                onPressed: _exportJson,
                 icon: const Icon(Icons.download_outlined),
                 label: const Text('导出 JSON'),
               ),
@@ -294,7 +310,155 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       }
     }
   }
+
+  Future<void> _exportJson() async {
+    try {
+      final result = await ref.read(jsonExportServiceProvider).export();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已导出 ${result.taskCount} 个任务到 ${result.filePath}'),
+          ),
+        );
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('数据未导出：$error')));
+      }
+    }
+  }
 }
+
+class _ConflictList extends ConsumerWidget {
+  const _ConflictList({required this.conflicts});
+
+  final List<SyncConflict> conflicts;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Column(
+    children: <Widget>[
+      for (final conflict in conflicts)
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 12),
+          leading: const Icon(Icons.compare_arrows, color: KairosColors.pollen),
+          title: Text(_entityLabel(conflict.entityType)),
+          subtitle: Text('冲突字段：${_conflictingFields(conflict).join('、')}'),
+          children: <Widget>[
+            for (final field in _conflictingFields(conflict))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    SizedBox(width: 104, child: Text(field)),
+                    Expanded(
+                      child: Text(
+                        '本地：${_conflictValue(conflict.localPayload, field)}\n'
+                        '服务端：${_conflictValue(conflict.serverPayload, field)}',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                FilledButton.icon(
+                  onPressed: () => _resolve(
+                    context,
+                    ref,
+                    conflict,
+                    SyncConflictResolution.keepLocal,
+                  ),
+                  icon: const Icon(Icons.upload_outlined),
+                  label: const Text('保留本地'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _resolve(
+                    context,
+                    ref,
+                    conflict,
+                    SyncConflictResolution.useServer,
+                  ),
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('使用服务端'),
+                ),
+              ],
+            ),
+          ],
+        ),
+    ],
+  );
+
+  Future<void> _resolve(
+    BuildContext context,
+    WidgetRef ref,
+    SyncConflict conflict,
+    SyncConflictResolution resolution,
+  ) async {
+    try {
+      await ref.read(syncEngineProvider).resolveConflict(conflict, resolution);
+      if (resolution == SyncConflictResolution.keepLocal) {
+        await ref.read(syncControllerProvider.notifier).synchronize();
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              resolution == SyncConflictResolution.keepLocal
+                  ? '已保留本地版本并重新同步'
+                  : '已采用服务端版本',
+            ),
+          ),
+        );
+      }
+    } on Object catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('冲突未解决：$error')));
+      }
+    }
+  }
+}
+
+List<String> _conflictingFields(SyncConflict conflict) {
+  try {
+    return (jsonDecode(conflict.conflictingFields) as List<dynamic>)
+        .whereType<String>()
+        .toList(growable: false);
+  } on Object {
+    return const <String>['未知字段'];
+  }
+}
+
+String _conflictValue(String payload, String field) {
+  try {
+    final decoded = jsonDecode(payload) as Map<String, dynamic>;
+    final changes = decoded['changes'];
+    final effectiveField = field == 'remote_entity' ? 'title' : field;
+    final value = changes is Map<String, dynamic>
+        ? changes[effectiveField]
+        : decoded[effectiveField];
+    final text = value == null ? '空' : value.toString();
+    return text.length <= 120 ? text : '${text.substring(0, 117)}...';
+  } on Object {
+    return '无法读取';
+  }
+}
+
+String _entityLabel(String entityType) => switch (entityType) {
+  'task' => '任务',
+  'blocker' => '推进困难点',
+  'tag' => '标签',
+  'project' => '项目',
+  'checklist_group' => '清单分组',
+  _ => entityType,
+};
 
 class _TaxonomySettings extends ConsumerWidget {
   @override

@@ -27,6 +27,8 @@ class SyncOutcome {
   final DateTime completedAtUtc;
 }
 
+enum SyncConflictResolution { keepLocal, useServer }
+
 class SyncEngine {
   SyncEngine({
     required AppDatabase database,
@@ -84,6 +86,68 @@ class SyncEngine {
     } finally {
       _running = false;
     }
+  }
+
+  Future<void> resolveConflict(
+    SyncConflict conflict,
+    SyncConflictResolution resolution,
+  ) async {
+    final serverEntity = jsonDecode(conflict.serverPayload);
+    if (serverEntity is! Map<String, dynamic> || serverEntity.isEmpty) {
+      throw const FormatException(
+        'Conflict does not contain a server version.',
+      );
+    }
+    final serverVersion = (serverEntity['version'] as num?)?.toInt();
+    if (serverVersion == null) {
+      throw const FormatException('Conflict server version is invalid.');
+    }
+    await _database.transaction(() async {
+      switch (resolution) {
+        case SyncConflictResolution.keepLocal:
+          await _setLocalEntityVersion(
+            conflict.entityType,
+            conflict.entityId,
+            serverVersion,
+          );
+          await (_database.update(_database.outboxOperations)..where(
+                (table) =>
+                    table.entityType.equals(conflict.entityType) &
+                    table.entityId.equals(conflict.entityId),
+              ))
+              .write(
+                OutboxOperationsCompanion(
+                  baseVersion: Value<int>(serverVersion),
+                  nextAttemptAtUtc: Value<DateTime>(DateTime.now().toUtc()),
+                  lastError: const Value<String?>(null),
+                ),
+              );
+        case SyncConflictResolution.useServer:
+          await _applyEntity(
+            conflict.entityType,
+            serverEntity,
+            deleted: false,
+            force: true,
+          );
+          await (_database.delete(_database.outboxOperations)..where(
+                (table) =>
+                    table.entityType.equals(conflict.entityType) &
+                    table.entityId.equals(conflict.entityId),
+              ))
+              .go();
+      }
+      await (_database.update(
+        _database.syncConflicts,
+      )..where((table) => table.id.equals(conflict.id))).write(
+        SyncConflictsCompanion(
+          resolvedAtUtc: Value<DateTime>(DateTime.now().toUtc()),
+        ),
+      );
+      final pending = await _database.select(_database.outboxOperations).get();
+      await (_database.update(_database.syncStates)
+            ..where((table) => table.id.equals(1)))
+          .write(SyncStatesCompanion(pendingCount: Value<int>(pending.length)));
+    });
   }
 
   Future<void> _ensureSyncState() => _database
@@ -371,6 +435,34 @@ class SyncEngine {
         );
     }
   }
+
+  Future<void> _setLocalEntityVersion(
+    String entityType,
+    String entityId,
+    int version,
+  ) => switch (entityType) {
+    'task' =>
+      (_database.update(_database.localTasks)
+            ..where((table) => table.id.equals(entityId)))
+          .write(LocalTasksCompanion(version: Value<int>(version))),
+    'blocker' =>
+      (_database.update(_database.localBlockers)
+            ..where((table) => table.id.equals(entityId)))
+          .write(LocalBlockersCompanion(version: Value<int>(version))),
+    'tag' =>
+      (_database.update(_database.localTags)
+            ..where((table) => table.id.equals(entityId)))
+          .write(LocalTagsCompanion(version: Value<int>(version))),
+    'project' =>
+      (_database.update(_database.localProjects)
+            ..where((table) => table.id.equals(entityId)))
+          .write(LocalProjectsCompanion(version: Value<int>(version))),
+    'checklist_group' =>
+      (_database.update(_database.localChecklistGroups)
+            ..where((table) => table.id.equals(entityId)))
+          .write(LocalChecklistGroupsCompanion(version: Value<int>(version))),
+    _ => throw FormatException('Unsupported conflict entity: $entityType'),
+  };
 
   Future<void> _applyEntity(
     String entityType,

@@ -83,7 +83,7 @@ void main() {
     expect(controller.status.lastHeartbeatAtUtc, now);
     expect(controller.status.heartbeatSuccesses, 1);
     expect(socket.sent.map(_messageType), contains('heartbeat_ack'));
-    expect(syncCount, 2);
+    expect(syncCount, 1);
 
     now = now.add(const Duration(seconds: 1));
     socket.add(<String, Object?>{
@@ -96,8 +96,8 @@ void main() {
     await pumpEventQueue();
 
     expect(controller.status.lastNotificationType, 'task');
-    expect(controller.status.serverCursor, 3);
-    expect(syncCount, 3);
+    expect(controller.status.serverCursor, 2);
+    expect(syncCount, 2);
     expect(
       events.any(
         (event) =>
@@ -107,6 +107,13 @@ void main() {
       ),
       isTrue,
     );
+    now = now.add(const Duration(minutes: 5));
+    socket.add(<String, Object?>{
+      'type': 'heartbeat',
+      'server_time': now.toIso8601String(),
+    });
+    await pumpEventQueue();
+    expect(syncCount, 3);
   });
 
   test(
@@ -169,7 +176,7 @@ void main() {
 
   test('stops retrying when authentication expires', () async {
     controller.authStateChanged(
-      const AuthState(phase: AuthPhase.error, message: 'expired'),
+      const AuthState(phase: AuthPhase.signedOut, message: 'expired'),
     );
     await pumpEventQueue();
 

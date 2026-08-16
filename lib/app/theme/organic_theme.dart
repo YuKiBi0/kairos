@@ -95,11 +95,32 @@ abstract final class OrganicTheme {
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all<Size>(const Size(44, 44)),
           shape: WidgetStateProperty.all<RoundedRectangleBorder>(
             const RoundedRectangleBorder(
               borderRadius: BorderRadius.all(Radius.circular(6)),
             ),
           ),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all<Size>(const Size(44, 44)),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all<Size>(const Size(44, 44)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all<Size>(const Size(44, 44)),
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all<Size>(const Size(44, 44)),
         ),
       ),
       tooltipTheme: const TooltipThemeData(

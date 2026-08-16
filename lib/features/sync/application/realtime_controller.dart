@@ -85,6 +85,7 @@ class RealtimeController implements RealtimeActions {
   bool _disposed = false;
   int _generation = 0;
   int _retryIndex = 0;
+  DateTime? _lastCursorCheckAtUtc;
 
   RealtimeStatus get status => _status;
 
@@ -92,14 +93,16 @@ class RealtimeController implements RealtimeActions {
     final hasSession = authState.session != null;
     final authenticated =
         authState.phase == AuthPhase.authenticated ||
-        (authState.phase == AuthPhase.error && hasSession);
+        (authState.phase == AuthPhase.error &&
+            (hasSession || authState.retryable));
     if (authenticated) {
       _enabled = true;
       unawaited(connect());
       return;
     }
     _enabled = false;
-    final expired = authState.phase == AuthPhase.error && !hasSession;
+    final expired =
+        authState.phase == AuthPhase.signedOut && authState.message != null;
     unawaited(
       _stop(
         state: expired
@@ -245,6 +248,7 @@ class RealtimeController implements RealtimeActions {
                   '成功：拉取 ${outcome.pulled}，上传 ${outcome.pushed}，冲突 ${outcome.conflicts}',
             ),
           );
+          _lastCursorCheckAtUtc = outcome.completedAtUtc;
           _addEvent('增量同步完成', 'HTTP', details: 'cursor=${outcome.cursor}');
         } on Object catch (error) {
           _emit(
@@ -370,7 +374,11 @@ class RealtimeController implements RealtimeActions {
     );
     _resetHeartbeatWatchdog();
     _addEvent('收到心跳', 'heartbeat');
-    unawaited(synchronizeNow());
+    final lastCheck = _lastCursorCheckAtUtc;
+    if (lastCheck == null ||
+        now.difference(lastCheck) >= const Duration(minutes: 5)) {
+      unawaited(synchronizeNow());
+    }
   }
 
   void _probeAcknowledged(Map<String, dynamic> message) {
@@ -471,7 +479,9 @@ class RealtimeController implements RealtimeActions {
     );
     _addEvent('连接中断', linkError.stage, errorCode: linkError.code);
     _retryTimer?.cancel();
-    _retryTimer = Timer(delay, () => unawaited(connect()));
+    if (!failedPermanently) {
+      _retryTimer = Timer(delay, () => unawaited(connect()));
+    }
   }
 
   void _resetHeartbeatWatchdog() {

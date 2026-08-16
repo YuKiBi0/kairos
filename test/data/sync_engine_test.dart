@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -138,6 +140,103 @@ void main() {
     expect(state.serverCursor, 0);
     expect(tasks, isEmpty);
   });
+
+  test(
+    'rebases conflicted outbox operation when keeping local version',
+    () async {
+      final repository = LocalTaskRepository(
+        database,
+        entityIdGenerator: () => 'shared-task',
+        operationIdGenerator: () => 'local-operation',
+      );
+      await repository.createTask(title: 'Local title', deviceId: 'device-a');
+      final conflict = await _insertConflict(
+        database,
+        localTitle: 'Local title',
+      );
+
+      await engine.resolveConflict(conflict, SyncConflictResolution.keepLocal);
+
+      final task = await repository.getTask('shared-task');
+      final operation = await database
+          .select(database.outboxOperations)
+          .getSingle();
+      final resolved = await database
+          .select(database.syncConflicts)
+          .getSingle();
+      final syncState = await database.select(database.syncStates).getSingle();
+      expect(task!.title, 'Local title');
+      expect(task.version, 4);
+      expect(task.dirty, isTrue);
+      expect(operation.baseVersion, 4);
+      expect(operation.lastError, equals(null));
+      expect(resolved.resolvedAtUtc, isNot(equals(null)));
+      expect(syncState.pendingCount, 1);
+    },
+  );
+
+  test(
+    'applies server entity and drops outbox when using server version',
+    () async {
+      final repository = LocalTaskRepository(
+        database,
+        entityIdGenerator: () => 'shared-task',
+        operationIdGenerator: () => 'local-operation',
+      );
+      await repository.createTask(title: 'Local title', deviceId: 'device-a');
+      final conflict = await _insertConflict(
+        database,
+        localTitle: 'Local title',
+      );
+
+      await engine.resolveConflict(conflict, SyncConflictResolution.useServer);
+
+      final task = await repository.getTask('shared-task');
+      final operations = await database.select(database.outboxOperations).get();
+      final resolved = await database
+          .select(database.syncConflicts)
+          .getSingle();
+      final syncState = await database.select(database.syncStates).getSingle();
+      expect(task!.title, 'Remote task');
+      expect(task.version, 4);
+      expect(task.dirty, isFalse);
+      expect(operations, isEmpty);
+      expect(resolved.resolvedAtUtc, isNot(equals(null)));
+      expect(syncState.pendingCount, 0);
+    },
+  );
+}
+
+Future<SyncConflict> _insertConflict(
+  AppDatabase database, {
+  required String localTitle,
+}) async {
+  await (database.update(
+    database.outboxOperations,
+  )..where((table) => table.operationId.equals('local-operation'))).write(
+    OutboxOperationsCompanion(
+      lastError: const Value<String?>('conflict'),
+      nextAttemptAtUtc: Value<DateTime>(
+        DateTime.now().toUtc().add(const Duration(days: 365)),
+      ),
+    ),
+  );
+  await database
+      .into(database.syncConflicts)
+      .insert(
+        SyncConflictsCompanion.insert(
+          id: 'conflict-id',
+          entityType: 'task',
+          entityId: 'shared-task',
+          localPayload: jsonEncode(<String, Object?>{
+            'changes': <String, Object?>{'title': localTitle},
+          }),
+          serverPayload: jsonEncode(_remoteTask(id: 'shared-task', version: 4)),
+          conflictingFields: jsonEncode(<String>['title']),
+          createdAtUtc: DateTime.now().toUtc(),
+        ),
+      );
+  return database.select(database.syncConflicts).getSingle();
 }
 
 Map<String, dynamic> _remoteTask({required String id, required int version}) {

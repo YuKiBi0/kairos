@@ -11,13 +11,19 @@ import '../../../domain/repositories/settings_repository.dart';
 enum AuthPhase { initializing, unconfigured, signedOut, authenticated, error }
 
 class AuthState {
-  const AuthState({required this.phase, this.session, this.message});
+  const AuthState({
+    required this.phase,
+    this.session,
+    this.message,
+    this.retryable = false,
+  });
 
   const AuthState.initializing() : this(phase: AuthPhase.initializing);
 
   final AuthPhase phase;
   final RemoteSession? session;
   final String? message;
+  final bool retryable;
 }
 
 abstract interface class AccessTokenProvider {
@@ -82,7 +88,11 @@ class AuthController extends StateNotifier<AuthState>
       );
       await _saveSession(session);
     } on ApiFailure catch (error) {
-      state = AuthState(phase: AuthPhase.error, message: error.message);
+      state = AuthState(
+        phase: AuthPhase.error,
+        message: error.message,
+        retryable: error.retryable,
+      );
       rethrow;
     }
   }
@@ -141,6 +151,7 @@ class AuthController extends StateNotifier<AuthState>
           phase: AuthPhase.error,
           session: preserveOnNetworkFailure ? state.session : null,
           message: error.message,
+          retryable: error.retryable,
         );
       }
     }

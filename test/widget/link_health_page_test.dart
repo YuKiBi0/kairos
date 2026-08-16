@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos/app/providers.dart';
@@ -51,6 +52,23 @@ void main() {
       serverCursor: 42,
       pendingOperations: 3,
     );
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText =
+              (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     await tester.pumpWidget(
       ProviderScope(
         overrides: <Override>[
@@ -65,6 +83,12 @@ void main() {
       find.textContaining('wss://kairos.example.com/api/v1/realtime'),
       findsOneWidget,
     );
+    await tester.tap(find.text('复制诊断信息'));
+    await tester.pump();
+    expect(clipboardText, isNotNull);
+    expect(clipboardText, isNot(contains('token=')));
+    expect(clipboardText, isNot(contains('secret')));
+    expect(clipboardText, isNot(contains('task title')));
   });
 
   testWidgets('connection and sync actions invoke their controllers', (
@@ -115,6 +139,47 @@ void main() {
     await tester.pump();
 
     expect(actions.reconnectCount, 1);
+  });
+
+  testWidgets('narrow layout supports 200 percent text without overflow', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          realtimeStatusProvider.overrideWith(
+            (ref) => RealtimeStatus(
+              state: RealtimeConnectionState.error,
+              endpoint: Uri.parse('wss://kairos.example.com/api/v1/realtime'),
+              lastError: const LinkError(
+                code: 'TLS_HANDSHAKE_FAILED',
+                stage: 'TLS',
+                message: '安全连接握手失败',
+                suggestion: '确认服务器证书有效且域名匹配',
+              ),
+            ),
+          ),
+          realtimeActionsProvider.overrideWithValue(_FakeRealtimeActions()),
+        ],
+        child: MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const LinkHealthPage(),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('实时通知不可用'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
 
