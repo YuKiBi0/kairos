@@ -413,7 +413,7 @@ class _WorkspaceHeader extends ConsumerWidget {
                   Text('Kairos', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 2),
                   Text(
-                    '现在最该推进什么',
+                    '凡事都有定期',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: KairosColors.quietInk,
                     ),
