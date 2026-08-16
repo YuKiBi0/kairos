@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos/app/providers.dart';
 import 'package:kairos/domain/entities/realtime_status.dart';
 import 'package:kairos/features/link_health/presentation/link_health_page.dart';
+import 'package:kairos/features/sync/application/realtime_controller.dart';
 
 void main() {
   const cases = <RealtimeConnectionState, String>{
@@ -65,4 +66,75 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('connection and sync actions invoke their controllers', (
+    tester,
+  ) async {
+    final actions = _FakeRealtimeActions();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          realtimeStatusProvider.overrideWith(
+            (ref) => RealtimeStatus(
+              state: RealtimeConnectionState.healthy,
+              endpoint: Uri.parse('wss://kairos.example.com/api/v1/realtime'),
+            ),
+          ),
+          realtimeActionsProvider.overrideWithValue(actions),
+        ],
+        child: const MaterialApp(home: LinkHealthPage()),
+      ),
+    );
+
+    await tester.tap(find.text('检查连接'));
+    await tester.tap(find.text('立即同步'));
+    await tester.pump();
+
+    expect(actions.checkCount, 1);
+    expect(actions.syncCount, 1);
+  });
+
+  testWidgets('error state exposes immediate reconnect action', (tester) async {
+    final actions = _FakeRealtimeActions();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          realtimeStatusProvider.overrideWith(
+            (ref) => RealtimeStatus(
+              state: RealtimeConnectionState.error,
+              endpoint: Uri.parse('wss://kairos.example.com/api/v1/realtime'),
+            ),
+          ),
+          realtimeActionsProvider.overrideWithValue(actions),
+        ],
+        child: const MaterialApp(home: LinkHealthPage()),
+      ),
+    );
+
+    await tester.tap(find.text('立即重连'));
+    await tester.pump();
+
+    expect(actions.reconnectCount, 1);
+  });
+}
+
+class _FakeRealtimeActions implements RealtimeActions {
+  int checkCount = 0;
+  int reconnectCount = 0;
+  int syncCount = 0;
+
+  @override
+  Future<void> checkConnection() async {
+    checkCount++;
+  }
+
+  @override
+  Future<void> reconnect() async {
+    reconnectCount++;
+  }
+
+  @override
+  Future<void> synchronizeNow() async {
+    syncCount++;
+  }
 }

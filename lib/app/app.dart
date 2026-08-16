@@ -16,6 +16,7 @@ class KairosApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(realtimeControllerProvider);
     ref.listen<AppPreferences>(
       workspaceControllerProvider,
       (previous, next) => unawaited(

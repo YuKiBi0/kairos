@@ -88,6 +88,23 @@ func TestRealtimeHintTriggersHTTPChanges(t *testing.T) {
 	if err != nil || !bytes.Contains(ready, []byte(`"type":"ready"`)) {
 		t.Fatalf("unexpected ready message: %s err=%v", ready, err)
 	}
+	probeID := uuid.NewString()
+	probe, err := json.Marshal(map[string]string{
+		"type":     "heartbeat_probe",
+		"probe_id": probeID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Write(ctx, websocket.MessageText, probe); err != nil {
+		t.Fatal(err)
+	}
+	_, probeAck, err := connection.Read(ctx)
+	if err != nil ||
+		!bytes.Contains(probeAck, []byte(`"type":"heartbeat_probe_ack"`)) ||
+		!bytes.Contains(probeAck, []byte(probeID)) {
+		t.Fatalf("unexpected heartbeat probe acknowledgement: %s err=%v", probeAck, err)
+	}
 
 	taskID := uuid.New()
 	pushPayload := map[string]any{

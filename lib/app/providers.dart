@@ -7,6 +7,7 @@ import '../core/platform/windows_window_service.dart';
 import '../core/security/secure_credential_store.dart';
 import '../data/local/database.dart' hide HealthEvent;
 import '../data/remote/kairos_api.dart';
+import '../data/remote/realtime_socket.dart';
 import '../data/repositories/local_metadata_repository.dart';
 import '../data/repositories/local_settings_repository.dart';
 import '../data/repositories/local_task_repository.dart';
@@ -23,6 +24,7 @@ import '../domain/repositories/task_repository.dart';
 import '../domain/services/task_sorter.dart';
 import '../domain/services/task_tree_rules.dart';
 import '../features/sync/application/auth_controller.dart';
+import '../features/sync/application/realtime_controller.dart';
 import '../features/sync/application/sync_controller.dart';
 
 final databaseProvider = Provider<AppDatabase>((ref) {
@@ -52,6 +54,14 @@ final credentialStoreProvider = Provider<CredentialStore>(
 );
 
 final kairosApiProvider = Provider<KairosApi>((ref) => KairosApi());
+
+final realtimeConnectorProvider = Provider<RealtimeConnector>(
+  (ref) => const IoRealtimeConnector(),
+);
+
+final networkMonitorProvider = Provider<NetworkMonitor>(
+  (ref) => ConnectivityNetworkMonitor(),
+);
 
 final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
   (ref) => AuthController(
@@ -131,6 +141,44 @@ final realtimeStatusProvider = StateProvider<RealtimeStatus>(
 
 final healthEventsProvider = StateProvider<List<HealthEvent>>(
   (ref) => const <HealthEvent>[],
+);
+
+final realtimeControllerProvider = Provider<RealtimeController>((ref) {
+  final controller = RealtimeController(
+    settings: ref.watch(settingsRepositoryProvider),
+    auth: ref.watch(authControllerProvider.notifier),
+    connector: ref.watch(realtimeConnectorProvider),
+    network: ref.watch(networkMonitorProvider),
+    synchronize: ref.watch(syncEngineProvider).synchronize,
+    onStatus: (status) {
+      ref.read(realtimeStatusProvider.notifier).state = status;
+    },
+    onEvents: (events) {
+      ref.read(healthEventsProvider.notifier).state = events;
+    },
+  );
+  ref
+    ..listen<AuthState>(
+      authControllerProvider,
+      (previous, next) => controller.authStateChanged(next),
+      fireImmediately: true,
+    )
+    ..listen<AsyncValue<SyncState?>>(localSyncStateProvider, (previous, next) {
+      next.whenData((syncState) {
+        if (syncState != null) {
+          controller.localSyncStateChanged(
+            cursor: syncState.serverCursor,
+            pending: syncState.pendingCount,
+          );
+        }
+      });
+    })
+    ..onDispose(() => unawaited(controller.dispose()));
+  return controller;
+});
+
+final realtimeActionsProvider = Provider<RealtimeActions>(
+  (ref) => ref.watch(realtimeControllerProvider),
 );
 
 final visibleTaskItemsProvider = Provider<AsyncValue<List<TaskListItem>>>((

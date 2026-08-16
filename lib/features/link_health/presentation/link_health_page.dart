@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/providers.dart';
@@ -19,12 +20,23 @@ class LinkHealthPage extends ConsumerWidget {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final main = <Widget>[
-            _ConnectionSummary(status: status),
+            _ConnectionSummary(
+              status: status,
+              onCheck: () =>
+                  ref.read(realtimeActionsProvider).checkConnection(),
+              onReconnect: () => ref.read(realtimeActionsProvider).reconnect(),
+            ),
             const SizedBox(height: 16),
-            _SyncSummary(status: status),
+            _SyncSummary(
+              status: status,
+              onSync: () => ref.read(realtimeActionsProvider).synchronizeNow(),
+            ),
           ];
           final secondary = <Widget>[
-            _EndpointInfo(status: status),
+            _EndpointInfo(
+              status: status,
+              onOpenSettings: () => context.go('/settings'),
+            ),
             const SizedBox(height: 16),
             _EventTimeline(events: events),
           ];
@@ -63,8 +75,11 @@ class GlobalLinkStatusIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final visual = _visualFor(status.state);
+    final heartbeat = status.lastHeartbeatAtUtc;
     return Tooltip(
-      message: visual.label,
+      message: heartbeat == null
+          ? visual.label
+          : '${visual.label} · 最近心跳 ${_formatTime(heartbeat)}',
       child: Semantics(
         label: visual.label,
         child: Icon(visual.icon, color: visual.color),
@@ -74,9 +89,15 @@ class GlobalLinkStatusIcon extends StatelessWidget {
 }
 
 class _ConnectionSummary extends StatelessWidget {
-  const _ConnectionSummary({required this.status});
+  const _ConnectionSummary({
+    required this.status,
+    required this.onCheck,
+    required this.onReconnect,
+  });
 
   final RealtimeStatus status;
+  final VoidCallback onCheck;
+  final VoidCallback onReconnect;
 
   @override
   Widget build(BuildContext context) {
@@ -124,14 +145,14 @@ class _ConnectionSummary extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: status.state == RealtimeConnectionState.unconfigured
                     ? null
-                    : () {},
+                    : onCheck,
                 icon: const Icon(Icons.monitor_heart_outlined),
                 label: const Text('检查连接'),
               ),
               if (status.state == RealtimeConnectionState.reconnecting ||
                   status.state == RealtimeConnectionState.error)
                 FilledButton.icon(
-                  onPressed: () {},
+                  onPressed: onReconnect,
                   icon: const Icon(Icons.refresh),
                   label: const Text('立即重连'),
                 ),
@@ -182,9 +203,10 @@ class _HeartbeatTrace extends StatelessWidget {
 }
 
 class _SyncSummary extends StatelessWidget {
-  const _SyncSummary({required this.status});
+  const _SyncSummary({required this.status, required this.onSync});
 
   final RealtimeStatus status;
+  final VoidCallback onSync;
 
   @override
   Widget build(BuildContext context) => _Panel(
@@ -201,11 +223,19 @@ class _SyncSummary extends StatelessWidget {
         ),
         _MetricRow(label: '服务端游标', value: '${status.serverCursor}'),
         _MetricRow(label: '待上传操作', value: '${status.pendingOperations}'),
+        _MetricRow(label: '最近结果', value: status.lastSyncResult ?? '尚无同步结果'),
+        _MetricRow(
+          label: '最近通知',
+          value: status.lastNotificationAtUtc == null
+              ? '尚未收到变更通知'
+              : '${status.lastNotificationType ?? 'unknown'} · '
+                    '${_formatTime(status.lastNotificationAtUtc!)}',
+        ),
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerLeft,
           child: FilledButton.icon(
-            onPressed: status.endpoint == null ? null : () {},
+            onPressed: status.endpoint == null ? null : onSync,
             icon: const Icon(Icons.sync),
             label: const Text('立即同步'),
           ),
@@ -216,9 +246,10 @@ class _SyncSummary extends StatelessWidget {
 }
 
 class _EndpointInfo extends StatelessWidget {
-  const _EndpointInfo({required this.status});
+  const _EndpointInfo({required this.status, required this.onOpenSettings});
 
   final RealtimeStatus status;
+  final VoidCallback onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -244,6 +275,18 @@ class _EndpointInfo extends StatelessWidget {
                 : 'WS 连接未加密',
           ),
           _MetricRow(label: '当前会话重连', value: '${status.reconnectCount} 次'),
+          _MetricRow(
+            label: '心跳结果',
+            value:
+                '${status.heartbeatSuccesses} 次成功 · ${status.heartbeatFailures} 次失败',
+          ),
+          _MetricRow(
+            label: '下次重试',
+            value: status.retryAtUtc == null
+                ? '无计划重试'
+                : '${_formatTime(status.retryAtUtc!)} · '
+                      '${status.retryInterval.inSeconds} 秒退避',
+          ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -253,6 +296,11 @@ class _EndpointInfo extends StatelessWidget {
                 onPressed: () => _copyDiagnostics(context),
                 icon: const Icon(Icons.copy_outlined),
                 label: const Text('复制诊断信息'),
+              ),
+              TextButton.icon(
+                onPressed: onOpenSettings,
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('打开同步设置'),
               ),
             ],
           ),
@@ -271,6 +319,8 @@ class _EndpointInfo extends StatelessWidget {
       'last_heartbeat=${status.lastHeartbeatAtUtc?.toIso8601String() ?? 'none'}',
       'round_trip_ms=${status.roundTripMs ?? 'none'}',
       'reconnect_count=${status.reconnectCount}',
+      'heartbeat_successes=${status.heartbeatSuccesses}',
+      'heartbeat_failures=${status.heartbeatFailures}',
       'server_cursor=${status.serverCursor}',
       'pending_operations=${status.pendingOperations}',
       'error_code=${status.lastError?.code ?? 'none'}',

@@ -35,6 +35,10 @@ class RealtimeStatus {
     this.retryInterval = Duration.zero,
     this.pendingOperations = 0,
     this.serverCursor = 0,
+    this.heartbeatSuccesses = 0,
+    this.heartbeatFailures = 0,
+    this.lastNotificationType,
+    this.lastSyncResult,
     this.lastError,
   });
 
@@ -52,8 +56,66 @@ class RealtimeStatus {
   final Duration retryInterval;
   final int pendingOperations;
   final int serverCursor;
+  final int heartbeatSuccesses;
+  final int heartbeatFailures;
+  final String? lastNotificationType;
+  final String? lastSyncResult;
   final LinkError? lastError;
+
+  RealtimeStatus copyWith({
+    RealtimeConnectionState? state,
+    Object? endpoint = _notProvided,
+    Object? lastHeartbeatAtUtc = _notProvided,
+    Object? lastNotificationAtUtc = _notProvided,
+    Object? lastIncrementalSyncAtUtc = _notProvided,
+    Object? roundTripMs = _notProvided,
+    int? reconnectCount,
+    Object? retryAtUtc = _notProvided,
+    Duration? retryInterval,
+    int? pendingOperations,
+    int? serverCursor,
+    int? heartbeatSuccesses,
+    int? heartbeatFailures,
+    Object? lastNotificationType = _notProvided,
+    Object? lastSyncResult = _notProvided,
+    Object? lastError = _notProvided,
+  }) => RealtimeStatus(
+    state: state ?? this.state,
+    endpoint: endpoint == _notProvided ? this.endpoint : endpoint as Uri?,
+    lastHeartbeatAtUtc: lastHeartbeatAtUtc == _notProvided
+        ? this.lastHeartbeatAtUtc
+        : lastHeartbeatAtUtc as DateTime?,
+    lastNotificationAtUtc: lastNotificationAtUtc == _notProvided
+        ? this.lastNotificationAtUtc
+        : lastNotificationAtUtc as DateTime?,
+    lastIncrementalSyncAtUtc: lastIncrementalSyncAtUtc == _notProvided
+        ? this.lastIncrementalSyncAtUtc
+        : lastIncrementalSyncAtUtc as DateTime?,
+    roundTripMs: roundTripMs == _notProvided
+        ? this.roundTripMs
+        : roundTripMs as int?,
+    reconnectCount: reconnectCount ?? this.reconnectCount,
+    retryAtUtc: retryAtUtc == _notProvided
+        ? this.retryAtUtc
+        : retryAtUtc as DateTime?,
+    retryInterval: retryInterval ?? this.retryInterval,
+    pendingOperations: pendingOperations ?? this.pendingOperations,
+    serverCursor: serverCursor ?? this.serverCursor,
+    heartbeatSuccesses: heartbeatSuccesses ?? this.heartbeatSuccesses,
+    heartbeatFailures: heartbeatFailures ?? this.heartbeatFailures,
+    lastNotificationType: lastNotificationType == _notProvided
+        ? this.lastNotificationType
+        : lastNotificationType as String?,
+    lastSyncResult: lastSyncResult == _notProvided
+        ? this.lastSyncResult
+        : lastSyncResult as String?,
+    lastError: lastError == _notProvided
+        ? this.lastError
+        : lastError as LinkError?,
+  );
 }
+
+const Object _notProvided = Object();
 
 class HealthEvent {
   const HealthEvent({

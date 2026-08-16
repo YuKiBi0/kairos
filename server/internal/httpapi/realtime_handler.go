@@ -45,6 +45,7 @@ func (a *API) realtime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	readErrors := make(chan error, 1)
+	probes := make(chan string, 8)
 	go func() {
 		for {
 			_, message, err := connection.Read(r.Context())
@@ -53,13 +54,18 @@ func (a *API) realtime(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var envelope struct {
-				Type string `json:"type"`
+				Type    string `json:"type"`
+				ProbeID string `json:"probe_id"`
 			}
 			if json.Unmarshal(message, &envelope) != nil {
 				continue
 			}
-			if envelope.Type != "heartbeat_ack" {
-				continue
+			if envelope.Type == "heartbeat_probe" && envelope.ProbeID != "" {
+				select {
+				case probes <- envelope.ProbeID:
+				case <-r.Context().Done():
+					return
+				}
 			}
 		}
 	}()
@@ -72,6 +78,15 @@ func (a *API) realtime(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-readErrors:
 			return
+		case probeID := <-probes:
+			ack := map[string]any{
+				"type":        "heartbeat_probe_ack",
+				"probe_id":    probeID,
+				"server_time": time.Now().UTC().Format(time.RFC3339Nano),
+			}
+			if err := writeWebSocketJSON(r.Context(), connection, ack); err != nil {
+				return
+			}
 		case hint := <-hints:
 			if err := writeWebSocketJSON(r.Context(), connection, hint); err != nil {
 				return

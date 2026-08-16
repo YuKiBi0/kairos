@@ -1,11 +1,14 @@
 import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/link_health/presentation/link_health_page.dart';
+import 'providers.dart';
 import 'theme/organic_theme.dart';
 
-class AdaptiveAppShell extends StatelessWidget {
+class AdaptiveAppShell extends ConsumerWidget {
   const AdaptiveAppShell({
     required this.location,
     required this.child,
@@ -16,7 +19,8 @@ class AdaptiveAppShell extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final realtimeStatus = ref.watch(realtimeStatusProvider);
     final selectedIndex = location.startsWith('/link-health')
         ? 1
         : location.startsWith('/settings')
@@ -51,18 +55,20 @@ class AdaptiveAppShell extends StatelessWidget {
                             ),
                           ),
                         ),
-                        destinations: const <NavigationRailDestination>[
-                          NavigationRailDestination(
+                        destinations: <NavigationRailDestination>[
+                          const NavigationRailDestination(
                             icon: Icon(Icons.checklist_outlined),
                             selectedIcon: Icon(Icons.checklist),
                             label: Text('任务'),
                           ),
                           NavigationRailDestination(
-                            icon: Icon(Icons.hub_outlined),
-                            selectedIcon: Icon(Icons.hub),
-                            label: Text('链路健康'),
+                            icon: GlobalLinkStatusIcon(status: realtimeStatus),
+                            selectedIcon: GlobalLinkStatusIcon(
+                              status: realtimeStatus,
+                            ),
+                            label: const Text('链路健康'),
                           ),
-                          NavigationRailDestination(
+                          const NavigationRailDestination(
                             icon: Icon(Icons.settings_outlined),
                             selectedIcon: Icon(Icons.settings),
                             label: Text('设置'),
@@ -84,18 +90,18 @@ class AdaptiveAppShell extends StatelessWidget {
           ? NavigationBar(
               selectedIndex: selectedIndex,
               onDestinationSelected: (index) => _navigate(context, index),
-              destinations: const <NavigationDestination>[
-                NavigationDestination(
+              destinations: <NavigationDestination>[
+                const NavigationDestination(
                   icon: Icon(Icons.checklist_outlined),
                   selectedIcon: Icon(Icons.checklist),
                   label: '任务',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.hub_outlined),
-                  selectedIcon: Icon(Icons.hub),
+                  icon: GlobalLinkStatusIcon(status: realtimeStatus),
+                  selectedIcon: GlobalLinkStatusIcon(status: realtimeStatus),
                   label: '链路',
                 ),
-                NavigationDestination(
+                const NavigationDestination(
                   icon: Icon(Icons.settings_outlined),
                   selectedIcon: Icon(Icons.settings),
                   label: '设置',
