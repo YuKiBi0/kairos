@@ -153,6 +153,7 @@ class _TaskEditorDialogState extends ConsumerState<TaskEditorDialog> {
                       DropdownMenuItem<TaskQuadrant>(
                         value: quadrant,
                         child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             Icon(
                               Icons.circle,
@@ -160,7 +161,7 @@ class _TaskEditorDialogState extends ConsumerState<TaskEditorDialog> {
                               color: quadrantColor(quadrant),
                             ),
                             const SizedBox(width: 8),
-                            Flexible(child: Text(quadrantShortLabel(quadrant))),
+                            Text(quadrantShortLabel(quadrant)),
                           ],
                         ),
                       ),
