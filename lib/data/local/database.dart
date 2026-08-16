@@ -183,9 +183,10 @@ class AppDatabase extends _$AppDatabase {
     onCreate: (Migrator migrator) async {
       await migrator.createAll();
       await _createIndexes();
-      await into(
-        syncStates,
-      ).insert(const SyncStatesCompanion(), mode: InsertMode.insertOrIgnore);
+      await into(syncStates).insert(
+        const SyncStatesCompanion(id: Value<int>(1)),
+        mode: InsertMode.insertOrIgnore,
+      );
     },
     beforeOpen: (OpeningDetails details) async {
       await customStatement('PRAGMA foreign_keys = ON');

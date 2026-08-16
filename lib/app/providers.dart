@@ -1,13 +1,16 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/platform/windows_window_service.dart';
 import '../core/security/secure_credential_store.dart';
 import '../data/local/database.dart' hide HealthEvent;
+import '../data/remote/kairos_api.dart';
 import '../data/repositories/local_metadata_repository.dart';
 import '../data/repositories/local_settings_repository.dart';
 import '../data/repositories/local_task_repository.dart';
+import '../data/sync/sync_engine.dart';
 import '../domain/entities/app_preferences.dart';
 import '../domain/entities/blocker.dart';
 import '../domain/entities/realtime_status.dart';
@@ -19,6 +22,8 @@ import '../domain/repositories/settings_repository.dart';
 import '../domain/repositories/task_repository.dart';
 import '../domain/services/task_sorter.dart';
 import '../domain/services/task_tree_rules.dart';
+import '../features/sync/application/auth_controller.dart';
+import '../features/sync/application/sync_controller.dart';
 
 final databaseProvider = Provider<AppDatabase>((ref) {
   final database = AppDatabase.open();
@@ -45,6 +50,47 @@ final windowsWindowServiceProvider = Provider<WindowsWindowService>(
 final credentialStoreProvider = Provider<CredentialStore>(
   (ref) => const SecureCredentialStore(),
 );
+
+final kairosApiProvider = Provider<KairosApi>((ref) => KairosApi());
+
+final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
+  (ref) => AuthController(
+    settings: ref.watch(settingsRepositoryProvider),
+    credentials: ref.watch(credentialStoreProvider),
+    api: ref.watch(kairosApiProvider),
+  ),
+);
+
+final syncEngineProvider = Provider<SyncEngine>(
+  (ref) => SyncEngine(
+    database: ref.watch(databaseProvider),
+    api: ref.watch(kairosApiProvider),
+    auth: ref.watch(authControllerProvider.notifier),
+    settings: ref.watch(settingsRepositoryProvider),
+  ),
+);
+
+final syncControllerProvider =
+    StateNotifierProvider<SyncController, SyncControllerState>(
+      (ref) => SyncController(ref.watch(syncEngineProvider)),
+    );
+
+final localSyncStateProvider = StreamProvider<SyncState?>((ref) {
+  final database = ref.watch(databaseProvider);
+  return (database.select(
+    database.syncStates,
+  )..where((table) => table.id.equals(1))).watchSingleOrNull();
+});
+
+final syncConflictsProvider = StreamProvider<List<SyncConflict>>((ref) {
+  final database = ref.watch(databaseProvider);
+  return (database.select(database.syncConflicts)
+        ..where((table) => table.resolvedAtUtc.isNull())
+        ..orderBy(<OrderingTerm Function(SyncConflicts)>[
+          (table) => OrderingTerm.desc(table.createdAtUtc),
+        ]))
+      .watch();
+});
 
 final workspaceControllerProvider =
     StateNotifierProvider<WorkspaceController, AppPreferences>(

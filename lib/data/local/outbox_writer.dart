@@ -36,7 +36,12 @@ class OutboxWriter {
     if (current == null) {
       await _database
           .into(_database.syncStates)
-          .insert(const SyncStatesCompanion(pendingCount: Value<int>(1)));
+          .insert(
+            const SyncStatesCompanion(
+              id: Value<int>(1),
+              pendingCount: Value<int>(1),
+            ),
+          );
       return;
     }
     await (_database.update(

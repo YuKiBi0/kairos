@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../../app/theme/organic_theme.dart';
 import '../../../domain/entities/taxonomy.dart';
+import '../../sync/application/auth_controller.dart';
+import '../../sync/application/sync_controller.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -16,6 +18,8 @@ class SettingsPage extends ConsumerStatefulWidget {
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   final _endpointController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
   bool _endpointLoaded = false;
 
   @override
@@ -30,6 +34,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   void dispose() {
     _endpointController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -45,6 +51,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final preferences = ref.watch(workspaceControllerProvider);
+    final auth = ref.watch(authControllerProvider);
+    final sync = ref.watch(syncControllerProvider);
+    final localSync = ref.watch(localSyncStateProvider);
+    final conflicts = ref.watch(syncConflictsProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: ListView(
@@ -76,6 +86,113 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
               ],
             ),
+          ),
+          _SettingsSection(
+            title: '账户与同步',
+            description: '访问令牌只驻留内存，刷新令牌保存在系统安全凭据库。',
+            child: auth.phase == AuthPhase.authenticated && auth.session != null
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.verified_user_outlined),
+                        title: Text(auth.session!.user.username),
+                        subtitle: Text(
+                          '${auth.session!.device.name} · ${auth.session!.device.platform}',
+                        ),
+                      ),
+                      localSync.when(
+                        data: (state) => Text(
+                          '服务端游标 ${state?.serverCursor ?? 0} · '
+                          '待上传 ${state?.pendingCount ?? 0}',
+                        ),
+                        error: (error, _) => Text('无法读取同步状态：$error'),
+                        loading: () => const LinearProgressIndicator(),
+                      ),
+                      const SizedBox(height: 6),
+                      conflicts.when(
+                        data: (items) => Text('待处理冲突 ${items.length}'),
+                        error: (error, _) => Text('无法读取冲突：$error'),
+                        loading: () => const SizedBox.shrink(),
+                      ),
+                      if (sync.message != null) ...<Widget>[
+                        const SizedBox(height: 8),
+                        Text(
+                          sync.message!,
+                          style: const TextStyle(color: KairosColors.clay),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: <Widget>[
+                          FilledButton.icon(
+                            onPressed: sync.phase == SyncPhase.running
+                                ? null
+                                : _synchronize,
+                            icon: sync.phase == SyncPhase.running
+                                ? const SizedBox.square(
+                                    dimension: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.sync),
+                            label: const Text('立即同步'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _logout,
+                            icon: const Icon(Icons.logout),
+                            label: const Text('退出登录'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      TextField(
+                        controller: _usernameController,
+                        autofillHints: const <String>[AutofillHints.username],
+                        decoration: const InputDecoration(
+                          labelText: '用户名',
+                          prefixIcon: Icon(Icons.person_outline),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _passwordController,
+                        obscureText: true,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        autofillHints: const <String>[AutofillHints.password],
+                        onSubmitted: (_) => _login(),
+                        decoration: const InputDecoration(
+                          labelText: '密码',
+                          prefixIcon: Icon(Icons.lock_outline),
+                        ),
+                      ),
+                      if (auth.message != null) ...<Widget>[
+                        const SizedBox(height: 8),
+                        Text(
+                          auth.message!,
+                          style: const TextStyle(color: KairosColors.clay),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.icon(
+                          onPressed: _login,
+                          icon: const Icon(Icons.login),
+                          label: const Text('登录同步服务'),
+                        ),
+                      ),
+                    ],
+                  ),
           ),
           if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
             _SettingsSection(
@@ -110,6 +227,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       await ref
           .read(settingsRepositoryProvider)
           .saveServiceEndpoint(_endpointController.text);
+      await ref.read(authControllerProvider.notifier).endpointChanged();
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -121,6 +239,46 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
       }
+    }
+  }
+
+  Future<void> _login() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text;
+    if (username.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请填写用户名和密码')));
+      return;
+    }
+    try {
+      final deviceId = await ref.read(deviceIdProvider.future);
+      await ref
+          .read(authControllerProvider.notifier)
+          .login(
+            username: username,
+            password: password,
+            deviceId: deviceId,
+            deviceName: defaultTargetPlatform == TargetPlatform.windows
+                ? 'Kairos Windows'
+                : 'Kairos Android',
+          );
+      _passwordController.clear();
+      await _synchronize();
+    } on Object {
+      _passwordController.clear();
+    }
+  }
+
+  Future<void> _logout() async {
+    await ref.read(authControllerProvider.notifier).logout();
+  }
+
+  Future<void> _synchronize() async {
+    try {
+      await ref.read(syncControllerProvider.notifier).synchronize();
+    } on Object {
+      // SyncController exposes the actionable error in its immutable state.
     }
   }
 
