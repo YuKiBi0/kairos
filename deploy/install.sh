@@ -35,19 +35,18 @@ install -d -m 0750 -o root -g kairos /etc/kairos
 install -m 0755 -o root -g root "$BINARY" /opt/kairos/bin/kairos-server
 find "$MIGRATIONS" -maxdepth 1 -type f -name '*.sql' -exec \
   install -m 0644 -o root -g root {} /opt/kairos/migrations/ \;
-install -m 0640 -o root -g kairos "$ENV_FILE" /etc/kairos/kairos.env
+if [[ $ENV_FILE == /etc/kairos/kairos.env ]]; then
+  chown root:kairos /etc/kairos/kairos.env
+  chmod 0640 /etc/kairos/kairos.env
+else
+  install -m 0640 -o root -g kairos "$ENV_FILE" /etc/kairos/kairos.env
+fi
 install -m 0644 -o root -g root \
   "$SCRIPT_DIR/kairos-server.service" /etc/systemd/system/kairos-server.service
 
-set -a
-# shellcheck disable=SC1091
-source /etc/kairos/kairos.env
-set +a
-: "${KAIROS_DATABASE_URL:?KAIROS_DATABASE_URL is required}"
-: "${KAIROS_SESSION_SECRET:?KAIROS_SESSION_SECRET is required}"
 (
   cd /opt/kairos
-  runuser -u kairos --preserve-environment -- bin/kairos-server migrate
+  runuser -u kairos -- bin/kairos-server --env-file /etc/kairos/kairos.env migrate
 )
 
 systemctl daemon-reload

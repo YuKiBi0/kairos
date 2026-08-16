@@ -60,7 +60,7 @@ PostgreSQL 18
 生产服务器建议：
 
 - 使用 systemd 的主流 Linux 发行版。
-- PostgreSQL 18，可使用系统包或 `deploy/docker-compose.postgres.yml`。
+- PostgreSQL 18，使用现有实例或操作系统包安装。
 - Nginx 或等价反向代理，以及有效的公网 TLS 证书。
 - Go 服务和 PostgreSQL 仅监听回环地址，只向公网开放 HTTPS 端口。
 
@@ -83,23 +83,16 @@ dart run build_runner build --delete-conflicting-outputs
 
 ### 服务端
 
-先创建 PostgreSQL 数据库。将 `server/.env.example` 复制到仓库外的受限目录，替换所有占位值，再加载环境变量：
+先创建 PostgreSQL 数据库。将 `server/.env.example` 复制到仓库外的受限目录并替换所有占位值，程序会直接读取该文件：
 
-```bash
-set -a
-source /secure/path/kairos.env
-set +a
-
+```text
 cd server
-go run ./cmd/kairos-server migrate
-read -rsp 'Kairos account password: ' KAIROS_BOOTSTRAP_PASSWORD && echo
-export KAIROS_BOOTSTRAP_PASSWORD
-go run ./cmd/kairos-server create-user owner
-unset KAIROS_BOOTSTRAP_PASSWORD
-go run ./cmd/kairos-server serve
+go run ./cmd/kairos-server --env-file /secure/path/kairos.env migrate
+go run ./cmd/kairos-server --env-file /secure/path/kairos.env create-user
+go run ./cmd/kairos-server --env-file /secure/path/kairos.env serve
 ```
 
-`KAIROS_BOOTSTRAP_PASSWORD` 只应通过当前进程环境传入，不要写进 `.env`、shell 历史或 Git。开发服务启动后检查：
+账号、密码、数据库 URL、迁移目录和其他运行配置全部放在环境文件中，不需要在 PowerShell 或 Bash 中导出变量。开发服务启动后检查：
 
 ```bash
 curl http://127.0.0.1:8080/healthz
@@ -115,15 +108,7 @@ curl http://127.0.0.1:8080/version
 
 ### 1. 准备 PostgreSQL
 
-可以使用已有 PostgreSQL 18，也可以只用 Compose 启动数据库：
-
-```bash
-export POSTGRES_PASSWORD='replace-with-a-strong-database-password'
-docker compose -f deploy/docker-compose.postgres.yml up -d
-unset POSTGRES_PASSWORD
-```
-
-Compose 默认创建数据库和用户 `kairos`，只映射到服务器的 `127.0.0.1:5432`，不会启动 Kairos API 或配置公网入口。生产环境应将密码保存在仓库外、权限受限的 Compose env 文件或密钥管理系统中。
+使用已有 PostgreSQL 18 或通过操作系统包管理器安装 PostgreSQL。Kairos 的部署流程不依赖 Docker；数据库的创建和权限配置由 PostgreSQL 管理工具完成。
 
 如果数据库密码包含 `@`、`:`、`/` 等字符，写入 PostgreSQL URL 前必须进行 URI 编码。
 
@@ -155,6 +140,9 @@ KAIROS_ACCESS_TTL=15m
 KAIROS_REFRESH_TTL=720h
 KAIROS_LOG_LEVEL=info
 KAIROS_CORS_ORIGINS=
+KAIROS_MIGRATIONS_DIR=/opt/kairos/migrations
+KAIROS_BOOTSTRAP_USERNAME=owner
+KAIROS_BOOTSTRAP_PASSWORD=replace-with-a-strong-account-password
 ```
 
 `KAIROS_SESSION_SECRET` 至少 32 个字符，应使用密码学安全随机数生成器创建，并与数据库密码分别保管。`KAIROS_BASE_URL` 必须与用户最终访问的 HTTPS 地址一致。
@@ -190,20 +178,11 @@ curl http://127.0.0.1:8080/readyz
 MVP 不提供公开注册。安装完成后在服务器上创建唯一账号：
 
 ```bash
-read -rsp 'Kairos account password: ' KAIROS_BOOTSTRAP_PASSWORD && echo
-export KAIROS_BOOTSTRAP_PASSWORD
-sudo --preserve-env=KAIROS_BOOTSTRAP_PASSWORD bash -c '
-  set -a
-  source /etc/kairos/kairos.env
-  set +a
-  cd /opt/kairos
-  runuser -u kairos --preserve-environment -- \
-    bin/kairos-server create-user owner
-'
-unset KAIROS_BOOTSTRAP_PASSWORD
+sudo -u kairos /opt/kairos/bin/kairos-server \
+  --env-file /etc/kairos/kairos.env create-user
 ```
 
-账号密码不会写入配置文件，服务端只保存密码哈希。
+程序从受限环境文件读取首次账号和密码，数据库中只保存密码哈希。创建成功后建议从环境文件删除 `KAIROS_BOOTSTRAP_USERNAME` 和 `KAIROS_BOOTSTRAP_PASSWORD`。
 
 ### 6. 配置 Nginx 与 TLS
 

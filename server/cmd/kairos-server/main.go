@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/YuKiBi0/kairos/server/internal/auth"
 	"github.com/YuKiBi0/kairos/server/internal/config"
+	"github.com/YuKiBi0/kairos/server/internal/envfile"
 	"github.com/YuKiBi0/kairos/server/internal/httpapi"
 	"github.com/YuKiBi0/kairos/server/internal/store"
 	"github.com/golang-migrate/migrate/v4"
@@ -33,6 +36,19 @@ func main() {
 }
 
 func run(arguments []string) error {
+	flags := flag.NewFlagSet("kairos-server", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	envPath := flags.String("env-file", "", "path to a dotenv environment file")
+	if err := flags.Parse(arguments); err != nil {
+		return fmt.Errorf("usage: kairos-server [--env-file PATH] [serve|migrate|create-user|version]: %w", err)
+	}
+	arguments = flags.Args()
+	if *envPath != "" {
+		if err := envfile.Load(*envPath); err != nil {
+			return err
+		}
+	}
+
 	command := "serve"
 	if len(arguments) > 0 {
 		command = arguments[0]
@@ -50,12 +66,16 @@ func run(arguments []string) error {
 	case "serve":
 		return serve(cfg, logger)
 	case "migrate":
-		return migrateDatabase(cfg.DatabaseURL)
+		return migrateDatabase(cfg.DatabaseURL, cfg.MigrationsDir)
 	case "create-user":
-		if len(arguments) != 2 {
-			return errors.New("usage: kairos-server create-user <username>")
+		if len(arguments) > 2 {
+			return errors.New("usage: kairos-server [--env-file PATH] create-user [username]")
 		}
-		return createUser(cfg, arguments[1])
+		username := cfg.BootstrapUsername
+		if len(arguments) == 2 {
+			username = arguments[1]
+		}
+		return createUser(cfg, username)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -108,8 +128,8 @@ func serve(cfg config.Config, logger *slog.Logger) error {
 	}
 }
 
-func migrateDatabase(databaseURL string) error {
-	root, err := filepath.Abs("migrations")
+func migrateDatabase(databaseURL, migrationsDir string) error {
+	root, err := filepath.Abs(migrationsDir)
 	if err != nil {
 		return fmt.Errorf("resolve migrations path: %w", err)
 	}
@@ -132,9 +152,9 @@ func createUser(cfg config.Config, username string) error {
 	if username == "" || len(username) > 100 {
 		return errors.New("username must contain between 1 and 100 characters")
 	}
-	password := os.Getenv("KAIROS_BOOTSTRAP_PASSWORD")
+	password := cfg.BootstrapPassword
 	if password == "" {
-		return errors.New("KAIROS_BOOTSTRAP_PASSWORD is required for create-user")
+		return errors.New("KAIROS_BOOTSTRAP_PASSWORD is required for create-user; set it in the environment file")
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {

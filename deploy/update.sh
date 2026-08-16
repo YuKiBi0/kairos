@@ -53,13 +53,9 @@ if [[ -n $MIGRATIONS ]]; then
   find "$MIGRATIONS" -maxdepth 1 -type f -name '*.sql' -exec \
     install -m 0644 -o root -g root {} /opt/kairos/migrations/ \;
 fi
-set -a
-# shellcheck disable=SC1091
-source /etc/kairos/kairos.env
-set +a
 (
   cd /opt/kairos
-  runuser -u kairos --preserve-environment -- bin/kairos-server migrate
+  runuser -u kairos -- bin/kairos-server --env-file /etc/kairos/kairos.env migrate
 )
 systemctl start kairos-server.service
 systemctl --quiet is-active kairos-server.service
