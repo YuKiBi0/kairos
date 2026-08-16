@@ -1,6 +1,7 @@
 import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -124,11 +125,16 @@ class AdaptiveAppShell extends ConsumerWidget {
   }
 }
 
-class _WindowsTitleBar extends StatelessWidget {
+class _WindowsTitleBar extends ConsumerWidget {
   const _WindowsTitleBar();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final alwaysOnTop = ref.watch(
+      workspaceControllerProvider.select(
+        (preferences) => preferences.alwaysOnTop,
+      ),
+    );
     final buttonColors = WindowButtonColors(
       iconNormal: KairosColors.forestInk,
       mouseOver: KairosColors.sage,
@@ -159,11 +165,85 @@ class _WindowsTitleBar extends StatelessWidget {
                 ),
               ),
             ),
+            WindowsPinButton(
+              pinned: alwaysOnTop,
+              onPressed: () => _setAlwaysOnTop(context, ref, !alwaysOnTop),
+            ),
             MinimizeWindowButton(colors: buttonColors),
             MaximizeWindowButton(colors: buttonColors),
             CloseWindowButton(colors: closeColors),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _setAlwaysOnTop(
+    BuildContext context,
+    WidgetRef ref,
+    bool value,
+  ) async {
+    try {
+      await ref.read(windowsWindowServiceProvider).setAlwaysOnTop(value);
+      ref.read(workspaceControllerProvider.notifier).setAlwaysOnTop(value);
+    } on PlatformException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('置顶设置未更新：${error.code}')));
+      }
+    }
+  }
+}
+
+class WindowsPinButton extends StatelessWidget {
+  const WindowsPinButton({
+    required this.pinned,
+    required this.onPressed,
+    super.key,
+  });
+
+  final bool pinned;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 46,
+      height: 32,
+      child: IconButton(
+        key: const ValueKey<String>('window-pin-button'),
+        tooltip: pinned ? '取消固定窗口' : '固定窗口',
+        onPressed: onPressed,
+        isSelected: pinned,
+        iconSize: 17,
+        padding: EdgeInsets.zero,
+        style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all(const Size(46, 32)),
+          maximumSize: WidgetStateProperty.all(const Size(46, 32)),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: WidgetStateProperty.all(const RoundedRectangleBorder()),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.pressed)) {
+              return Colors.white;
+            }
+            return KairosColors.forestInk;
+          }),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.pressed)) {
+              return KairosColors.moss;
+            }
+            if (states.contains(WidgetState.selected)) {
+              return KairosColors.sage;
+            }
+            if (states.contains(WidgetState.hovered)) {
+              return KairosColors.sage.withValues(alpha: 0.65);
+            }
+            return Colors.transparent;
+          }),
+        ),
+        icon: const Icon(Icons.push_pin_outlined),
+        selectedIcon: const Icon(Icons.push_pin),
       ),
     );
   }
