@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 CREATE TABLE users (
     id uuid PRIMARY KEY,
     username text NOT NULL UNIQUE,
