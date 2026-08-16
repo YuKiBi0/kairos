@@ -123,6 +123,25 @@ void main() {
       expect(byId['grandchild']!.dirty, isTrue);
     });
 
+    test('inserts a moved sibling at the requested normalized index', () {
+      final moved =
+          TaskTreeRules(<Task>[
+            task('a', sortOrder: 0),
+            task('b', sortOrder: 1),
+            task('c', sortOrder: 2),
+          ]).moveSubtree(
+            taskId: 'c',
+            targetParentId: null,
+            targetSortOrder: 0,
+            nowUtc: now.add(const Duration(minutes: 1)),
+          );
+      final ordered = moved.where((item) => item.parentId == null).toList()
+        ..sort((left, right) => left.sortOrder.compareTo(right.sortOrder));
+
+      expect(ordered.map((item) => item.id), <String>['c', 'a', 'b']);
+      expect(ordered.map((item) => item.sortOrder), <int>[0, 1, 2]);
+    });
+
     test(
       'calculates recursive descendant progress without completing parent',
       () {

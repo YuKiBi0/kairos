@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/platform/windows_window_service.dart';
 import '../core/security/secure_credential_store.dart';
+import '../data/export/json_export_service.dart';
 import '../data/local/database.dart' hide HealthEvent;
 import '../data/remote/kairos_api.dart';
 import '../data/remote/realtime_socket.dart';
@@ -61,6 +62,10 @@ final realtimeConnectorProvider = Provider<RealtimeConnector>(
 
 final networkMonitorProvider = Provider<NetworkMonitor>(
   (ref) => ConnectivityNetworkMonitor(),
+);
+
+final jsonExportServiceProvider = Provider<JsonExportService>(
+  (ref) => JsonExportService(database: ref.watch(databaseProvider)),
 );
 
 final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
@@ -187,11 +192,39 @@ final visibleTaskItemsProvider = Provider<AsyncValue<List<TaskListItem>>>((
   final tasks = ref.watch(tasksProvider);
   final blockerCounts = ref.watch(unresolvedBlockerCountsProvider);
   final preferences = ref.watch(workspaceControllerProvider);
+  final tagValues = ref
+      .watch(tagsProvider)
+      .when(
+        data: (value) => value,
+        error: (_, _) => const <Tag>[],
+        loading: () => const <Tag>[],
+      );
+  final projectValues = ref
+      .watch(projectsProvider)
+      .when(
+        data: (value) => value,
+        error: (_, _) => const <Project>[],
+        loading: () => const <Project>[],
+      );
+  final groupValues = ref
+      .watch(checklistGroupsProvider)
+      .when(
+        data: (value) => value,
+        error: (_, _) => const <ChecklistGroup>[],
+        loading: () => const <ChecklistGroup>[],
+      );
 
   return tasks.when(
     data: (taskValues) => blockerCounts.when(
       data: (counts) => AsyncValue<List<TaskListItem>>.data(
-        _projectTasks(taskValues, counts, preferences),
+        _projectTasks(
+          taskValues,
+          counts,
+          preferences,
+          tagValues,
+          projectValues,
+          groupValues,
+        ),
       ),
       error: AsyncValue<List<TaskListItem>>.error,
       loading: AsyncValue<List<TaskListItem>>.loading,
@@ -240,11 +273,29 @@ class WorkspaceController extends StateNotifier<AppPreferences> {
     );
   }
 
+  void toggleStatus(TaskStatus status) {
+    final selected = <TaskStatus>{...state.statuses};
+    selected.contains(status) ? selected.remove(status) : selected.add(status);
+    _update(state.copyWith(statuses: Set<TaskStatus>.unmodifiable(selected)));
+  }
+
   void setDueDateFilter(DueDateFilter value) =>
       _update(state.copyWith(dueDateFilter: value));
 
   void setBlockerFilter(bool? value) =>
       _update(state.copyWith(hasUnresolvedBlockers: value));
+
+  void toggleTag(String tagId) {
+    final selected = <String>{...state.tagIds};
+    selected.contains(tagId) ? selected.remove(tagId) : selected.add(tagId);
+    _update(state.copyWith(tagIds: Set<String>.unmodifiable(selected)));
+  }
+
+  void setProjectFilter(String? projectId) =>
+      _update(state.copyWith(projectId: projectId));
+
+  void setChecklistGroupFilter(String? checklistGroupId) =>
+      _update(state.copyWith(checklistGroupId: checklistGroupId));
 
   void setAlwaysOnTop(bool value) =>
       _update(state.copyWith(alwaysOnTop: value));
@@ -252,8 +303,12 @@ class WorkspaceController extends StateNotifier<AppPreferences> {
   void clearFilters() => _update(
     state.copyWith(
       quadrants: const <TaskQuadrant>{},
+      statuses: const <TaskStatus>{},
       dueDateFilter: DueDateFilter.any,
       hasUnresolvedBlockers: null,
+      tagIds: const <String>{},
+      projectId: null,
+      checklistGroupId: null,
     ),
   );
 
@@ -279,16 +334,24 @@ class TaskActions {
     required String title,
     String? description,
     TaskQuadrant quadrant = TaskQuadrant.importantNotUrgent,
+    TaskStatus status = TaskStatus.notStarted,
     DateTime? dueAtUtc,
     String? parentId,
+    Set<String> tagIds = const <String>{},
+    String? projectId,
+    String? checklistGroupId,
   }) async {
     final deviceId = await _settings.getOrCreateDeviceId();
     return _tasks.createTask(
       title: title,
       description: description,
       quadrant: quadrant,
+      status: status,
       dueAtUtc: dueAtUtc,
       parentId: parentId,
+      tagIds: tagIds,
+      projectId: projectId,
+      checklistGroupId: checklistGroupId,
       deviceId: deviceId,
     );
   }
@@ -308,6 +371,20 @@ class TaskActions {
 
   Future<void> delete(Task task) =>
       _tasks.softDeleteTask(task.id, DateTime.now().toUtc());
+
+  Future<void> restore(Task task) =>
+      _tasks.restoreTask(task.id, DateTime.now().toUtc());
+
+  Future<void> move({
+    required Task task,
+    required String? targetParentId,
+    required int targetSortOrder,
+  }) => _tasks.moveTask(
+    taskId: task.id,
+    targetParentId: targetParentId,
+    targetSortOrder: targetSortOrder,
+    nowUtc: DateTime.now().toUtc(),
+  );
 }
 
 final taskActionsProvider = Provider<TaskActions>(
@@ -321,15 +398,29 @@ List<TaskListItem> _projectTasks(
   List<Task> tasks,
   Map<String, int> blockerCounts,
   AppPreferences preferences,
+  List<Tag> tags,
+  List<Project> projects,
+  List<ChecklistGroup> groups,
 ) {
   final active = tasks.where((task) => !task.isDeleted).toList(growable: false);
   final byId = <String, Task>{for (final task in active) task.id: task};
   final tree = TaskTreeRules(active);
+  final tagNames = <String, String>{for (final tag in tags) tag.id: tag.name};
+  final projectNames = <String, String>{
+    for (final project in projects) project.id: project.name,
+  };
+  final groupNames = <String, String>{
+    for (final group in groups) group.id: group.name,
+  };
   final filter = TaskFilter(
     searchText: preferences.searchText,
     quadrants: preferences.quadrants,
+    statuses: preferences.statuses,
     dueDate: preferences.dueDateFilter,
     hasUnresolvedBlockers: preferences.hasUnresolvedBlockers,
+    tagIds: preferences.tagIds,
+    projectId: preferences.projectId,
+    checklistGroupId: preferences.checklistGroupId,
   );
   final now = DateTime.now();
   final items = <TaskListItem>[];
@@ -345,6 +436,12 @@ List<TaskListItem> _projectTasks(
       totalDescendantCount: progress.total,
       unresolvedBlockerCount: blockerCounts[task.id] ?? 0,
       parentPath: _parentPath(task, byId),
+      tagNames: task.tagIds
+          .map((id) => tagNames[id])
+          .whereType<String>()
+          .toList(growable: false),
+      projectName: projectNames[task.projectId],
+      checklistGroupName: groupNames[task.checklistGroupId],
     );
     if (filter.matches(item)) {
       items.add(item);

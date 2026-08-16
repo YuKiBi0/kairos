@@ -57,6 +57,7 @@ class LocalTaskRepository implements TaskRepository {
     required String deviceId,
     String? description,
     domain.TaskQuadrant quadrant = domain.TaskQuadrant.importantNotUrgent,
+    domain.TaskStatus status = domain.TaskStatus.notStarted,
     DateTime? dueAtUtc,
     String? parentId,
     Set<String> tagIds = const <String>{},
@@ -78,6 +79,7 @@ class LocalTaskRepository implements TaskRepository {
       title: title,
       description: description,
       quadrant: quadrant,
+      status: status,
       dueAtUtc: dueAtUtc?.toUtc(),
       parentId: parentId,
       depth: depth,
@@ -162,11 +164,14 @@ class LocalTaskRepository implements TaskRepository {
     final before = <String, domain.Task>{
       for (final task in original) task.id: task,
     };
+    final changed = <domain.Task>[];
     for (final task in moved) {
       final previous = before[task.id]!;
-      if (previous.parentId != task.parentId ||
+      if (task.id == taskId ||
+          previous.parentId != task.parentId ||
           previous.depth != task.depth ||
           previous.sortOrder != task.sortOrder) {
+        changed.add(task);
         await (_database.update(_database.localTasks)
               ..where((table) => table.id.equals(task.id)))
             .write(_mapper.toLocal(task));
@@ -182,6 +187,15 @@ class LocalTaskRepository implements TaskRepository {
         'updated_at',
       },
     );
+    for (final sibling in changed) {
+      final previous = before[sibling.id]!;
+      if (sibling.id != taskId && previous.sortOrder != sibling.sortOrder) {
+        await _enqueue(
+          sibling,
+          changedFields: const <String>{'sort_order', 'updated_at'},
+        );
+      }
+    }
   });
 
   @override

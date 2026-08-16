@@ -7,6 +7,8 @@ import '../../../app/theme/organic_theme.dart';
 import '../../../app/theme/quadrant_colors.dart';
 import '../../../domain/entities/blocker.dart';
 import '../../../domain/entities/task.dart';
+import '../../../domain/entities/taxonomy.dart';
+import '../../../domain/services/task_tree_rules.dart';
 import 'task_editor_dialog.dart';
 
 class TaskDetailPage extends ConsumerWidget {
@@ -26,17 +28,18 @@ class TaskDetailPage extends ConsumerWidget {
             return const Center(child: Text('任务不存在或已删除'));
           }
           final task = matches.single;
-          final children =
-              values
-                  .where(
-                    (candidate) =>
-                        candidate.parentId == task.id && !candidate.isDeleted,
-                  )
-                  .toList(growable: false)
-                ..sort(
-                  (left, right) => left.sortOrder.compareTo(right.sortOrder),
-                );
-          return _TaskDetailContent(task: task, children: children);
+          final active = values
+              .where((candidate) => !candidate.isDeleted)
+              .toList();
+          final descendants = _descendants(task.id, active);
+          final progress = TaskTreeRules(active).progressFor(task.id);
+          return _TaskDetailContent(
+            task: task,
+            descendants: descendants,
+            parentPath: _taskParentPath(task, active),
+            completedDescendants: progress.completed,
+            totalDescendants: progress.total,
+          );
         },
         error: (error, _) => Center(child: Text('无法读取任务：$error')),
         loading: () =>
@@ -47,14 +50,51 @@ class TaskDetailPage extends ConsumerWidget {
 }
 
 class _TaskDetailContent extends ConsumerWidget {
-  const _TaskDetailContent({required this.task, required this.children});
+  const _TaskDetailContent({
+    required this.task,
+    required this.descendants,
+    required this.parentPath,
+    required this.completedDescendants,
+    required this.totalDescendants,
+  });
 
   final Task task;
-  final List<Task> children;
+  final List<Task> descendants;
+  final List<Task> parentPath;
+  final int completedDescendants;
+  final int totalDescendants;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final blockers = ref.watch(blockersProvider(task.id));
+    final tags = ref
+        .watch(tagsProvider)
+        .when(
+          data: (value) => value,
+          error: (_, _) => const <Tag>[],
+          loading: () => const <Tag>[],
+        );
+    final projects = ref
+        .watch(projectsProvider)
+        .when(
+          data: (value) => value,
+          error: (_, _) => const <Project>[],
+          loading: () => const <Project>[],
+        );
+    final groups = ref
+        .watch(checklistGroupsProvider)
+        .when(
+          data: (value) => value,
+          error: (_, _) => const <ChecklistGroup>[],
+          loading: () => const <ChecklistGroup>[],
+        );
+    final tagNames = <String, String>{for (final tag in tags) tag.id: tag.name};
+    final projectNames = <String, String>{
+      for (final project in projects) project.id: project.name,
+    };
+    final groupNames = <String, String>{
+      for (final group in groups) group.id: group.name,
+    };
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
       children: <Widget>[
@@ -116,6 +156,24 @@ class _TaskDetailContent extends ConsumerWidget {
             ),
           ],
         ),
+        if (parentPath.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 12),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            children: <Widget>[
+              for (final parent in parentPath) ...<Widget>[
+                TextButton(
+                  onPressed: () =>
+                      context.pushReplacement('/tasks/${parent.id}'),
+                  child: Text(parent.title),
+                ),
+                const Icon(Icons.chevron_right, size: 18),
+              ],
+              Text(task.title),
+            ],
+          ),
+        ],
         const SizedBox(height: 24),
         _Section(
           title: '详细描述',
@@ -133,9 +191,36 @@ class _TaskDetailContent extends ConsumerWidget {
           child: Text(
             task.dueAtUtc == null
                 ? '无明确截止时间'
-                : MaterialLocalizations.of(
-                    context,
-                  ).formatFullDate(task.dueAtUtc!.toLocal()),
+                : '${MaterialLocalizations.of(context).formatFullDate(task.dueAtUtc!.toLocal())} '
+                      '${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(task.dueAtUtc!.toLocal()))}',
+          ),
+        ),
+        _Section(
+          title: '归类',
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final tagId in task.tagIds)
+                Chip(
+                  avatar: const Icon(Icons.label_outline, size: 16),
+                  label: Text(tagNames[tagId] ?? '未知标签'),
+                ),
+              if (task.projectId != null)
+                Chip(
+                  avatar: const Icon(Icons.folder_outlined, size: 16),
+                  label: Text(projectNames[task.projectId] ?? '已归档项目'),
+                ),
+              if (task.checklistGroupId != null)
+                Chip(
+                  avatar: const Icon(Icons.checklist_outlined, size: 16),
+                  label: Text(groupNames[task.checklistGroupId] ?? '已归档清单分组'),
+                ),
+              if (task.tagIds.isEmpty &&
+                  task.projectId == null &&
+                  task.checklistGroupId == null)
+                const Text('未归类'),
+            ],
           ),
         ),
         _Section(
@@ -159,32 +244,44 @@ class _TaskDetailContent extends ConsumerWidget {
           ),
         ),
         _Section(
-          title: '直接子任务',
+          title: '子任务树',
           trailing: IconButton(
             tooltip: task.depth >= 5 ? '已达到 5 层上限' : '添加子任务',
             onPressed: task.depth >= 5 ? null : () => _addChild(context, ref),
             icon: const Icon(Icons.add),
           ),
-          child: children.isEmpty
+          child: descendants.isEmpty
               ? const Text('暂无子任务')
               : Column(
                   children: <Widget>[
-                    for (final child in children)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          child.status.isCompleted
-                              ? Icons.check_circle
-                              : Icons.radio_button_unchecked,
-                          color: child.status.isCompleted
-                              ? KairosColors.moss
-                              : KairosColors.quietInk,
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '已完成 $completedDescendants / $totalDescendants',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final child in descendants)
+                      Padding(
+                        padding: EdgeInsets.only(
+                          left: (child.depth - task.depth - 1) * 20.0,
                         ),
-                        title: Text(child.title),
-                        subtitle: Text(quadrantShortLabel(child.quadrant)),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () =>
-                            context.pushReplacement('/tasks/${child.id}'),
+                        child: ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            child.status.isCompleted
+                                ? Icons.check_circle
+                                : Icons.radio_button_unchecked,
+                            color: child.status.isCompleted
+                                ? KairosColors.moss
+                                : KairosColors.quietInk,
+                          ),
+                          title: Text(child.title),
+                          subtitle: Text(quadrantShortLabel(child.quadrant)),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () =>
+                              context.pushReplacement('/tasks/${child.id}'),
+                        ),
                       ),
                   ],
                 ),
@@ -214,9 +311,22 @@ class _TaskDetailContent extends ConsumerWidget {
         title: draft.title,
         description: draft.description.isEmpty ? null : draft.description,
         quadrant: draft.quadrant,
+        status: draft.status,
         dueAtUtc: draft.dueAtUtc,
+        tagIds: draft.tagIds,
+        projectId: draft.projectId,
+        checklistGroupId: draft.checklistGroupId,
       ),
-      const <String>{'title', 'description', 'quadrant', 'due_at'},
+      const <String>{
+        'title',
+        'description',
+        'quadrant',
+        'status',
+        'due_at',
+        'tag_ids',
+        'project_id',
+        'checklist_group_id',
+      },
     );
   }
 
@@ -268,6 +378,45 @@ class _TaskDetailContent extends ConsumerWidget {
           );
     }
   }
+}
+
+List<Task> _taskParentPath(Task task, List<Task> tasks) {
+  final byId = <String, Task>{for (final item in tasks) item.id: item};
+  final path = <Task>[];
+  final visited = <String>{task.id};
+  var parentId = task.parentId;
+  while (parentId != null && visited.add(parentId)) {
+    final parent = byId[parentId];
+    if (parent == null) {
+      break;
+    }
+    path.insert(0, parent);
+    parentId = parent.parentId;
+  }
+  return path;
+}
+
+List<Task> _descendants(String taskId, List<Task> tasks) {
+  final byParent = <String, List<Task>>{};
+  for (final task in tasks) {
+    final parentId = task.parentId;
+    if (parentId != null) {
+      byParent.putIfAbsent(parentId, () => <Task>[]).add(task);
+    }
+  }
+  for (final children in byParent.values) {
+    children.sort((left, right) => left.sortOrder.compareTo(right.sortOrder));
+  }
+  final result = <Task>[];
+  void addChildren(String parentId) {
+    for (final child in byParent[parentId] ?? const <Task>[]) {
+      result.add(child);
+      addChildren(child.id);
+    }
+  }
+
+  addChildren(taskId);
+  return result;
 }
 
 class _Section extends StatelessWidget {

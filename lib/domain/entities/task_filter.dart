@@ -74,6 +74,9 @@ class TaskListItem {
     this.totalDescendantCount = 0,
     this.unresolvedBlockerCount = 0,
     this.parentPath = const <String>[],
+    this.tagNames = const <String>[],
+    this.projectName,
+    this.checklistGroupName,
   });
 
   final Task task;
@@ -81,6 +84,9 @@ class TaskListItem {
   final int totalDescendantCount;
   final int unresolvedBlockerCount;
   final List<String> parentPath;
+  final List<String> tagNames;
+  final String? projectName;
+  final String? checklistGroupName;
 
   bool get hasDescendants => totalDescendantCount > 0;
 }

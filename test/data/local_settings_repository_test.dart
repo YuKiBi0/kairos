@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos/data/local/database.dart';
 import 'package:kairos/data/repositories/local_settings_repository.dart';
 import 'package:kairos/domain/entities/app_preferences.dart';
+import 'package:kairos/domain/entities/task.dart';
+import 'package:kairos/domain/entities/task_filter.dart';
 import 'package:kairos/domain/services/task_sorter.dart';
 
 void main() {
@@ -27,6 +29,13 @@ void main() {
         scope: TaskScope.today,
         searchText: 'report',
         alwaysOnTop: true,
+        quadrants: <TaskQuadrant>{TaskQuadrant.importantUrgent},
+        statuses: <TaskStatus>{TaskStatus.inProgress},
+        dueDateFilter: DueDateFilter.withDueDate,
+        hasUnresolvedBlockers: true,
+        tagIds: <String>{'tag-a', 'tag-b'},
+        projectId: 'project-a',
+        checklistGroupId: 'group-a',
       );
 
       await repository.savePreferences(expected);
@@ -37,6 +46,13 @@ void main() {
       expect(actual.scope, expected.scope);
       expect(actual.searchText, expected.searchText);
       expect(actual.alwaysOnTop, isTrue);
+      expect(actual.quadrants, expected.quadrants);
+      expect(actual.statuses, expected.statuses);
+      expect(actual.dueDateFilter, expected.dueDateFilter);
+      expect(actual.hasUnresolvedBlockers, isTrue);
+      expect(actual.tagIds, expected.tagIds);
+      expect(actual.projectId, expected.projectId);
+      expect(actual.checklistGroupId, expected.checklistGroupId);
     },
   );
 
@@ -59,6 +75,16 @@ void main() {
 
       await expectLater(
         repository.saveServiceEndpoint('not a url'),
+        throwsFormatException,
+      );
+      await expectLater(
+        repository.saveServiceEndpoint(
+          'https://owner:secret@kairos.example.com?token=hidden',
+        ),
+        throwsFormatException,
+      );
+      await expectLater(
+        repository.saveServiceEndpoint('ftp://kairos.example.com'),
         throwsFormatException,
       );
       await repository.saveServiceEndpoint(null);

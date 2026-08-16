@@ -103,6 +103,7 @@ class Task {
     required String updatedByDeviceId,
     required DateTime nowUtc,
     TaskQuadrant quadrant = TaskQuadrant.importantNotUrgent,
+    TaskStatus status = TaskStatus.notStarted,
     String? parentId,
     int depth = 1,
     int sortOrder = 0,
@@ -116,7 +117,7 @@ class Task {
     title: title,
     description: description,
     quadrant: quadrant,
-    status: TaskStatus.notStarted,
+    status: status,
     dueAtUtc: dueAtUtc,
     parentId: parentId,
     depth: depth,
@@ -126,6 +127,7 @@ class Task {
     checklistGroupId: checklistGroupId,
     createdAtUtc: nowUtc,
     updatedAtUtc: nowUtc,
+    completedAtUtc: status.isCompleted ? nowUtc : null,
     updatedByDeviceId: updatedByDeviceId,
   );
 

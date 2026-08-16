@@ -12,6 +12,7 @@ abstract interface class TaskRepository {
     required String deviceId,
     String? description,
     TaskQuadrant quadrant,
+    TaskStatus status,
     DateTime? dueAtUtc,
     String? parentId,
     Set<String> tagIds,

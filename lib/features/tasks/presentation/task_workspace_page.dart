@@ -8,6 +8,7 @@ import '../../../app/theme/organic_theme.dart';
 import '../../../domain/entities/app_preferences.dart';
 import '../../../domain/entities/task.dart';
 import '../../../domain/entities/task_filter.dart';
+import '../../../domain/entities/taxonomy.dart';
 import '../../../domain/services/task_sorter.dart';
 import 'task_editor_dialog.dart';
 import 'widgets/task_views.dart';
@@ -63,9 +64,22 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
                 ),
                 Expanded(
                   child: items.when(
-                    data: (values) => values.isEmpty
-                        ? _EmptyWorkspace(onCreate: _createTask)
-                        : _buildView(preferences.viewMode, values),
+                    data: (values) => RefreshIndicator(
+                      onRefresh: () =>
+                          ref.read(realtimeActionsProvider).synchronizeNow(),
+                      child: values.isEmpty
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: <Widget>[
+                                SizedBox(
+                                  height:
+                                      MediaQuery.sizeOf(context).height - 220,
+                                  child: _EmptyWorkspace(onCreate: _createTask),
+                                ),
+                              ],
+                            )
+                          : _buildView(preferences.viewMode, values),
+                    ),
                     error: (error, _) => _WorkspaceError(error: error),
                     loading: () => const Center(
                       child: CircularProgressIndicator.adaptive(),
@@ -99,6 +113,7 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
           onOpen: _open,
           onMenu: _showTaskMenu,
           onAddChild: _createChild,
+          onReorder: _reorder,
         ),
         TaskViewMode.quadrant => QuadrantTaskView(
           items: items,
@@ -117,7 +132,10 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
     final draft = await showDialog<TaskDraft>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => TaskEditorDialog(parentTitle: parent?.title),
+      builder: (context) => TaskEditorDialog(
+        parentTitle: parent?.title,
+        parentDueAtUtc: parent?.dueAtUtc,
+      ),
     );
     if (draft == null || !mounted) {
       return;
@@ -129,8 +147,12 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
             title: draft.title,
             description: draft.description.isEmpty ? null : draft.description,
             quadrant: draft.quadrant,
+            status: draft.status,
             dueAtUtc: draft.dueAtUtc,
             parentId: parent?.id,
+            tagIds: draft.tagIds,
+            projectId: draft.projectId,
+            checklistGroupId: draft.checklistGroupId,
           );
     } on Object catch (error) {
       if (mounted) {
@@ -156,6 +178,18 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
   void _open(TaskListItem item) => context.push('/tasks/${item.task.id}');
 
   Future<void> _showTaskMenu(TaskListItem item) async {
+    final allTasks = await ref.read(taskRepositoryProvider).getTasks();
+    if (!mounted) {
+      return;
+    }
+    final siblings =
+        allTasks
+            .where(
+              (task) => !task.isDeleted && task.parentId == item.task.parentId,
+            )
+            .toList()
+          ..sort((left, right) => left.sortOrder.compareTo(right.sortOrder));
+    final siblingIndex = siblings.indexWhere((task) => task.id == item.task.id);
     final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -167,6 +201,27 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
               leading: const Icon(Icons.edit_outlined),
               title: const Text('打开详情'),
               onTap: () => Navigator.pop(context, 'open'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.drive_file_move_outline),
+              title: const Text('移动任务'),
+              onTap: () => Navigator.pop(context, 'move'),
+            ),
+            ListTile(
+              enabled: siblingIndex > 0,
+              leading: const Icon(Icons.arrow_upward),
+              title: const Text('同级上移'),
+              onTap: siblingIndex > 0
+                  ? () => Navigator.pop(context, 'up')
+                  : null,
+            ),
+            ListTile(
+              enabled: siblingIndex >= 0 && siblingIndex < siblings.length - 1,
+              leading: const Icon(Icons.arrow_downward),
+              title: const Text('同级下移'),
+              onTap: siblingIndex >= 0 && siblingIndex < siblings.length - 1
+                  ? () => Navigator.pop(context, 'down')
+                  : null,
             ),
             ListTile(
               enabled: item.task.depth < 5,
@@ -192,13 +247,122 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
         _open(item);
       case 'child':
         await _createChild(item);
+      case 'move':
+        await _showMoveDialog(item.task, allTasks);
+      case 'up':
+        await _moveTask(
+          item.task,
+          targetParentId: item.task.parentId,
+          targetSortOrder: siblingIndex - 1,
+        );
+      case 'down':
+        await _moveTask(
+          item.task,
+          targetParentId: item.task.parentId,
+          targetSortOrder: siblingIndex + 1,
+        );
       case 'delete':
         await ref.read(taskActionsProvider).delete(item.task);
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('任务已删除，可在同步前恢复')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('任务已删除'),
+              action: SnackBarAction(
+                label: '撤销',
+                onPressed: () =>
+                    ref.read(taskActionsProvider).restore(item.task),
+              ),
+            ),
+          );
         }
+    }
+  }
+
+  Future<void> _showMoveDialog(Task task, List<Task> allTasks) async {
+    final descendants = _descendantIds(task.id, allTasks);
+    final targets =
+        allTasks
+            .where(
+              (candidate) =>
+                  !candidate.isDeleted &&
+                  candidate.id != task.id &&
+                  !descendants.contains(candidate.id) &&
+                  candidate.depth < 5,
+            )
+            .toList()
+          ..sort((left, right) => left.title.compareTo(right.title));
+    final selection = await showDialog<_MoveSelection>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('移动任务'),
+        children: <Widget>[
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, const _MoveSelection(null)),
+            child: const ListTile(
+              leading: Icon(Icons.home_outlined),
+              title: Text('移动到根级'),
+            ),
+          ),
+          for (final target in targets)
+            SimpleDialogOption(
+              onPressed: () =>
+                  Navigator.pop(context, _MoveSelection(target.id)),
+              child: ListTile(
+                leading: const Icon(Icons.subdirectory_arrow_right),
+                title: Text(target.title),
+                subtitle: Text('第 ${target.depth} 层'),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selection == null || !mounted) {
+      return;
+    }
+    final targetOrder = allTasks
+        .where(
+          (candidate) =>
+              !candidate.isDeleted &&
+              candidate.parentId == selection.parentId &&
+              candidate.id != task.id,
+        )
+        .length;
+    await _moveTask(
+      task,
+      targetParentId: selection.parentId,
+      targetSortOrder: targetOrder,
+    );
+  }
+
+  Future<void> _reorder(
+    TaskListItem item,
+    String? targetParentId,
+    int targetSortOrder,
+  ) => _moveTask(
+    item.task,
+    targetParentId: targetParentId,
+    targetSortOrder: targetSortOrder,
+  );
+
+  Future<void> _moveTask(
+    Task task, {
+    required String? targetParentId,
+    required int targetSortOrder,
+  }) async {
+    try {
+      await ref
+          .read(taskActionsProvider)
+          .move(
+            task: task,
+            targetParentId: targetParentId,
+            targetSortOrder: targetSortOrder,
+          );
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('任务未移动：$error')));
+      }
     }
   }
 
@@ -405,6 +569,27 @@ class _TaskFilterSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(workspaceControllerProvider);
     final controller = ref.read(workspaceControllerProvider.notifier);
+    final tags = ref
+        .watch(tagsProvider)
+        .when(
+          data: (value) => value,
+          error: (_, _) => const <Tag>[],
+          loading: () => const <Tag>[],
+        );
+    final projects = ref
+        .watch(projectsProvider)
+        .when(
+          data: (value) => value,
+          error: (_, _) => const <Project>[],
+          loading: () => const <Project>[],
+        );
+    final groups = ref
+        .watch(checklistGroupsProvider)
+        .when(
+          data: (value) => value,
+          error: (_, _) => const <ChecklistGroup>[],
+          loading: () => const <ChecklistGroup>[],
+        );
     return SafeArea(
       child: SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(
@@ -446,6 +631,70 @@ class _TaskFilterSheet extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 20),
+            Text('状态', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                for (final status in TaskStatus.values)
+                  FilterChip(
+                    label: Text(status.label),
+                    selected: state.statuses.contains(status),
+                    onSelected: (_) => controller.toggleStatus(status),
+                  ),
+              ],
+            ),
+            if (tags.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 20),
+              Text('标签', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  for (final tag in tags)
+                    FilterChip(
+                      label: Text(tag.name),
+                      selected: state.tagIds.contains(tag.id),
+                      onSelected: (_) => controller.toggleTag(tag.id),
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: state.projectId ?? '',
+              decoration: const InputDecoration(labelText: '项目'),
+              items: <DropdownMenuItem<String>>[
+                const DropdownMenuItem<String>(value: '', child: Text('不限')),
+                for (final project in projects)
+                  DropdownMenuItem<String>(
+                    value: project.id,
+                    child: Text(project.name),
+                  ),
+              ],
+              onChanged: (value) => controller.setProjectFilter(
+                value == null || value.isEmpty ? null : value,
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: state.checklistGroupId ?? '',
+              decoration: const InputDecoration(labelText: '清单分组'),
+              items: <DropdownMenuItem<String>>[
+                const DropdownMenuItem<String>(value: '', child: Text('不限')),
+                for (final group in groups)
+                  DropdownMenuItem<String>(
+                    value: group.id,
+                    child: Text(group.name),
+                  ),
+              ],
+              onChanged: (value) => controller.setChecklistGroupFilter(
+                value == null || value.isEmpty ? null : value,
+              ),
+            ),
+            const SizedBox(height: 12),
             DropdownButtonFormField<DueDateFilter>(
               initialValue: state.dueDateFilter,
               decoration: const InputDecoration(labelText: 'DDL'),
@@ -467,15 +716,23 @@ class _TaskFilterSheet extends ConsumerWidget {
               },
             ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<bool?>(
-              initialValue: state.hasUnresolvedBlockers,
+            DropdownButtonFormField<String>(
+              initialValue: switch (state.hasUnresolvedBlockers) {
+                true => 'with',
+                false => 'without',
+                null => 'any',
+              },
               decoration: const InputDecoration(labelText: '推进困难点'),
-              items: const <DropdownMenuItem<bool?>>[
-                DropdownMenuItem(value: null, child: Text('不限')),
-                DropdownMenuItem(value: true, child: Text('存在未解决困难点')),
-                DropdownMenuItem(value: false, child: Text('无未解决困难点')),
+              items: const <DropdownMenuItem<String>>[
+                DropdownMenuItem(value: 'any', child: Text('不限')),
+                DropdownMenuItem(value: 'with', child: Text('存在未解决困难点')),
+                DropdownMenuItem(value: 'without', child: Text('无未解决困难点')),
               ],
-              onChanged: controller.setBlockerFilter,
+              onChanged: (value) => controller.setBlockerFilter(switch (value) {
+                'with' => true,
+                'without' => false,
+                _ => null,
+              }),
             ),
             const SizedBox(height: 20),
             FilledButton(
@@ -534,4 +791,24 @@ class _WorkspaceError extends StatelessWidget {
       child: Text('无法读取本地任务。\n$error', textAlign: TextAlign.center),
     ),
   );
+}
+
+class _MoveSelection {
+  const _MoveSelection(this.parentId);
+
+  final String? parentId;
+}
+
+Set<String> _descendantIds(String taskId, List<Task> tasks) {
+  final result = <String>{};
+  final pending = <String>[taskId];
+  while (pending.isNotEmpty) {
+    final parentId = pending.removeLast();
+    for (final task in tasks) {
+      if (task.parentId == parentId && result.add(task.id)) {
+        pending.add(task.id);
+      }
+    }
+  }
+  return result;
 }

@@ -45,8 +45,14 @@ class LocalSettingsRepository implements SettingsRepository {
       'quadrants': preferences.quadrants
           .map((quadrant) => quadrant.wireName)
           .toList(growable: false),
+      'statuses': preferences.statuses
+          .map((status) => status.name)
+          .toList(growable: false),
       'due_date_filter': preferences.dueDateFilter.name,
       'has_unresolved_blockers': preferences.hasUnresolvedBlockers,
+      'tag_ids': preferences.tagIds.toList(growable: false)..sort(),
+      'project_id': preferences.projectId,
+      'checklist_group_id': preferences.checklistGroupId,
     }),
   );
 
@@ -74,8 +80,15 @@ class LocalSettingsRepository implements SettingsRepository {
       return;
     }
     final uri = Uri.tryParse(normalized);
-    if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
-      throw const FormatException('Service endpoint must be an absolute URL.');
+    if (uri == null ||
+        !uri.hasAuthority ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      throw const FormatException(
+        'Service endpoint must be an HTTP(S) base URL without credentials or query parameters.',
+      );
     }
     await _write(_serviceEndpointKey, uri.toString());
   }
@@ -115,10 +128,19 @@ class LocalSettingsRepository implements SettingsRepository {
             .whereType<String>()
             .map(TaskQuadrant.fromWireName)
             .toSet(),
+        statuses: (json['statuses'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>()
+            .map(TaskStatus.values.byName)
+            .toSet(),
         dueDateFilter: DueDateFilter.values.byName(
           json['due_date_filter'] as String? ?? DueDateFilter.any.name,
         ),
         hasUnresolvedBlockers: json['has_unresolved_blockers'] as bool?,
+        tagIds: (json['tag_ids'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>()
+            .toSet(),
+        projectId: json['project_id'] as String?,
+        checklistGroupId: json['checklist_group_id'] as String?,
       );
     } on Object {
       return const AppPreferences();

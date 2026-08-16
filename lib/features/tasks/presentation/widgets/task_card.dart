@@ -110,6 +110,11 @@ class TaskCard extends StatelessWidget {
                                     text: quadrantShortLabel(task.quadrant),
                                     color: stripe,
                                   ),
+                                  _MetaLabel(
+                                    icon: Icons.flag_outlined,
+                                    text: task.status.label,
+                                    color: KairosColors.quietInk,
+                                  ),
                                   _DueLabel(dueAtUtc: task.dueAtUtc),
                                   if (item.hasDescendants)
                                     _MetaLabel(
@@ -124,6 +129,24 @@ class TaskCard extends StatelessWidget {
                                       text:
                                           '困难点 ${item.unresolvedBlockerCount}',
                                       color: KairosColors.pollen,
+                                    ),
+                                  for (final tagName in item.tagNames.take(2))
+                                    _MetaLabel(
+                                      icon: Icons.label_outline,
+                                      text: tagName,
+                                      color: KairosColors.moss,
+                                    ),
+                                  if (item.projectName != null)
+                                    _MetaLabel(
+                                      icon: Icons.folder_outlined,
+                                      text: item.projectName!,
+                                      color: KairosColors.river,
+                                    ),
+                                  if (item.checklistGroupName != null)
+                                    _MetaLabel(
+                                      icon: Icons.checklist_outlined,
+                                      text: item.checklistGroupName!,
+                                      color: KairosColors.quietInk,
                                     ),
                                   if (task.dirty)
                                     const _MetaLabel(

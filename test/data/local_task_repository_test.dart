@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos/data/local/database.dart';
@@ -101,5 +102,46 @@ void main() {
       deletedAt.add(const Duration(minutes: 1)),
     );
     expect((await repository.getTask(child.id))!.deletedAtUtc, isNull);
+  });
+
+  test('queues normalized sibling order changes when reordering', () async {
+    final first = await repository.createTask(
+      title: 'First',
+      deviceId: 'test-device',
+    );
+    final second = await repository.createTask(
+      title: 'Second',
+      deviceId: 'test-device',
+    );
+    final third = await repository.createTask(
+      title: 'Third',
+      deviceId: 'test-device',
+    );
+    await database.delete(database.outboxOperations).go();
+    await (database.update(database.syncStates)
+          ..where((table) => table.id.equals(1)))
+        .write(const SyncStatesCompanion(pendingCount: Value<int>(0)));
+
+    await repository.moveTask(
+      taskId: third.id,
+      targetParentId: null,
+      targetSortOrder: 0,
+      nowUtc: DateTime.utc(2026, 8, 16, 9),
+    );
+
+    final tasks = await repository.getTasks()
+      ..sort((left, right) => left.sortOrder.compareTo(right.sortOrder));
+    final outbox = await database.select(database.outboxOperations).get();
+    expect(tasks.map((task) => task.id), <String>[
+      third.id,
+      first.id,
+      second.id,
+    ]);
+    expect(outbox.map((operation) => operation.entityId).toSet(), <String>{
+      first.id,
+      second.id,
+      third.id,
+    });
+    expect(outbox, hasLength(3));
   });
 }

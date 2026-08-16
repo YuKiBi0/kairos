@@ -100,6 +100,42 @@ class TaskTreeRules {
         ),
       );
     }
+    final targetSiblings =
+        updated
+            .where(
+              (current) =>
+                  current.parentId == targetParentId && current.id != taskId,
+            )
+            .toList()
+          ..sort((left, right) {
+            final order = left.sortOrder.compareTo(right.sortOrder);
+            return order != 0 ? order : left.id.compareTo(right.id);
+          });
+    final movedRootIndex = updated.indexWhere(
+      (current) => current.id == taskId,
+    );
+    final movedRoot = updated.removeAt(movedRootIndex);
+    targetSiblings.insert(
+      targetSortOrder.clamp(0, targetSiblings.length),
+      movedRoot,
+    );
+    final orderedTargets = <String, Task>{
+      for (var index = 0; index < targetSiblings.length; index++)
+        targetSiblings[index].id: targetSiblings[index].copyWith(
+          sortOrder: index,
+          updatedAtUtc: nowUtc,
+          dirty: true,
+        ),
+    };
+    updated.addAll(
+      orderedTargets.values.where((current) => current.id == taskId),
+    );
+    for (var index = 0; index < updated.length; index++) {
+      final ordered = orderedTargets[updated[index].id];
+      if (ordered != null) {
+        updated[index] = ordered;
+      }
+    }
     return _normalizeSiblings(updated, nowUtc);
   }
 

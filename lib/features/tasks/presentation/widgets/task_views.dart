@@ -7,6 +7,12 @@ import '../../../../domain/entities/task_filter.dart';
 import 'task_card.dart';
 
 typedef TaskItemCallback = void Function(TaskListItem item);
+typedef TaskReorderCallback =
+    void Function(
+      TaskListItem item,
+      String? targetParentId,
+      int targetSortOrder,
+    );
 
 class TaskListView extends StatelessWidget {
   const TaskListView({
@@ -24,6 +30,7 @@ class TaskListView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListView.separated(
+    physics: const AlwaysScrollableScrollPhysics(),
     padding: const EdgeInsets.fromLTRB(20, 8, 20, 96),
     itemCount: items.length,
     separatorBuilder: (_, _) => const SizedBox(height: 10),
@@ -47,6 +54,7 @@ class TaskTreeView extends StatefulWidget {
     required this.onOpen,
     required this.onMenu,
     required this.onAddChild,
+    required this.onReorder,
     super.key,
   });
 
@@ -55,6 +63,7 @@ class TaskTreeView extends StatefulWidget {
   final TaskItemCallback onOpen;
   final TaskItemCallback onMenu;
   final TaskItemCallback onAddChild;
+  final TaskReorderCallback onReorder;
 
   @override
   State<TaskTreeView> createState() => _TaskTreeViewState();
@@ -116,74 +125,100 @@ class _TaskTreeViewState extends State<TaskTreeView> {
           ),
         ),
         Expanded(
-          child: ListView.separated(
+          child: ReorderableListView.builder(
+            buildDefaultDragHandles: false,
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 96),
             itemCount: rows.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            onReorder: (oldIndex, newIndex) {
+              if (newIndex > oldIndex) {
+                newIndex--;
+              }
+              if (newIndex == oldIndex || rows.isEmpty) {
+                return;
+              }
+              final moved = rows[oldIndex].item;
+              final target = rows[newIndex].item.task;
+              widget.onReorder(moved, target.parentId, target.sortOrder);
+            },
             itemBuilder: (context, index) {
               final row = rows[index];
               return Padding(
-                padding: EdgeInsets.only(left: row.visualDepth * 22.0),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: row.visualDepth == 0
-                        ? null
-                        : const Border(
-                            left: BorderSide(
-                              color: KairosColors.sage,
-                              width: 2,
+                key: ValueKey<String>('tree-row-${row.item.task.id}'),
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Padding(
+                  padding: EdgeInsets.only(left: row.visualDepth * 22.0),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: row.visualDepth == 0
+                          ? null
+                          : const Border(
+                              left: BorderSide(
+                                color: KairosColors.sage,
+                                width: 2,
+                              ),
+                            ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        SizedBox.square(
+                          dimension: 44,
+                          child: row.hasChildren
+                              ? IconButton(
+                                  tooltip: _collapsed.contains(row.item.task.id)
+                                      ? '展开子任务'
+                                      : '折叠子任务',
+                                  onPressed: () => setState(() {
+                                    _collapsed.contains(row.item.task.id)
+                                        ? _collapsed.remove(row.item.task.id)
+                                        : _collapsed.add(row.item.task.id);
+                                  }),
+                                  icon: Icon(
+                                    _collapsed.contains(row.item.task.id)
+                                        ? Icons.chevron_right
+                                        : Icons.expand_more,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.circle,
+                                  size: 9,
+                                  color: KairosColors.sage,
+                                ),
+                        ),
+                        Expanded(
+                          child: TaskCard(
+                            item: row.item,
+                            compact: true,
+                            onToggleCompleted: () => widget.onToggle(row.item),
+                            onOpen: () => widget.onOpen(row.item),
+                            onMenuRequested: () => widget.onMenu(row.item),
+                          ),
+                        ),
+                        SizedBox.square(
+                          dimension: 44,
+                          child: IconButton(
+                            tooltip: row.item.task.depth >= 5
+                                ? '已达到 5 层上限'
+                                : '添加子任务',
+                            onPressed: row.item.task.depth >= 5
+                                ? null
+                                : () => widget.onAddChild(row.item),
+                            icon: const Icon(Icons.add_circle_outline),
+                          ),
+                        ),
+                        SizedBox.square(
+                          dimension: 44,
+                          child: ReorderableDelayedDragStartListener(
+                            index: index,
+                            child: const Tooltip(
+                              message: '长按拖动排序',
+                              child: Icon(Icons.drag_indicator),
                             ),
                           ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      SizedBox.square(
-                        dimension: 44,
-                        child: row.hasChildren
-                            ? IconButton(
-                                tooltip: _collapsed.contains(row.item.task.id)
-                                    ? '展开子任务'
-                                    : '折叠子任务',
-                                onPressed: () => setState(() {
-                                  _collapsed.contains(row.item.task.id)
-                                      ? _collapsed.remove(row.item.task.id)
-                                      : _collapsed.add(row.item.task.id);
-                                }),
-                                icon: Icon(
-                                  _collapsed.contains(row.item.task.id)
-                                      ? Icons.chevron_right
-                                      : Icons.expand_more,
-                                ),
-                              )
-                            : const Icon(
-                                Icons.circle,
-                                size: 9,
-                                color: KairosColors.sage,
-                              ),
-                      ),
-                      Expanded(
-                        child: TaskCard(
-                          item: row.item,
-                          compact: true,
-                          onToggleCompleted: () => widget.onToggle(row.item),
-                          onOpen: () => widget.onOpen(row.item),
-                          onMenuRequested: () => widget.onMenu(row.item),
                         ),
-                      ),
-                      SizedBox.square(
-                        dimension: 44,
-                        child: IconButton(
-                          tooltip: row.item.task.depth >= 5
-                              ? '已达到 5 层上限'
-                              : '添加子任务',
-                          onPressed: row.item.task.depth >= 5
-                              ? null
-                              : () => widget.onAddChild(row.item),
-                          icon: const Icon(Icons.add_circle_outline),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -227,6 +262,7 @@ class QuadrantTaskView extends StatelessWidget {
       ];
       if (constraints.maxWidth >= 900) {
         return GridView.count(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 96),
           crossAxisCount: 2,
           childAspectRatio: 1.28,
@@ -236,6 +272,7 @@ class QuadrantTaskView extends StatelessWidget {
         );
       }
       return ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
         itemCount: sections.length,
         separatorBuilder: (_, _) => const SizedBox(height: 12),

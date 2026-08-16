@@ -30,6 +30,9 @@ void main() {
     completedDescendantCount: descendants == 0 ? 0 : 1,
     totalDescendantCount: descendants,
     unresolvedBlockerCount: blockers,
+    tagNames: const <String>['工作'],
+    projectName: '发布',
+    checklistGroupName: '本周',
   );
 
   testWidgets('task card shows required summary and handles completion', (
@@ -60,6 +63,9 @@ void main() {
     expect(find.text('1/4'), findsOneWidget);
     expect(find.text('困难点 2'), findsOneWidget);
     expect(find.text('待同步'), findsOneWidget);
+    expect(find.text('工作'), findsOneWidget);
+    expect(find.text('发布'), findsOneWidget);
+    expect(find.text('本周'), findsOneWidget);
 
     await tester.tap(find.byTooltip('完成任务'));
     expect(toggled, isTrue);
