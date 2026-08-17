@@ -99,6 +99,9 @@ class RealtimeController implements RealtimeActions {
     if (authenticated) {
       _enabled = true;
       unawaited(connect());
+      if (_online && _status.pendingOperations > 0) {
+        unawaited(synchronizeNow());
+      }
       return;
     }
     _enabled = false;
@@ -114,7 +117,11 @@ class RealtimeController implements RealtimeActions {
   }
 
   void localSyncStateChanged({required int cursor, required int pending}) {
+    final previousPending = _status.pendingOperations;
     _emit(_status.copyWith(appliedCursor: cursor, pendingOperations: pending));
+    if (_enabled && _online && pending > previousPending) {
+      unawaited(synchronizeNow());
+    }
   }
 
   Future<void> connect({bool manual = false}) async {
@@ -307,6 +314,9 @@ class RealtimeController implements RealtimeActions {
     _addEvent('网络恢复', 'network');
     if (_enabled) {
       unawaited(connect(manual: true));
+      if (_status.pendingOperations > 0) {
+        unawaited(synchronizeNow());
+      }
     }
   }
 
