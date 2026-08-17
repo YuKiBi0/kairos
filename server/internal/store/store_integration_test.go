@@ -212,12 +212,34 @@ func TestSyncOperationsAndConflicts(t *testing.T) {
 	if len(snapshot.Tasks) != 5 || len(snapshot.Tags) != 1 || len(snapshot.Blockers) != 1 {
 		t.Fatalf("unexpected snapshot sizes: tasks=%d tags=%d blockers=%d", len(snapshot.Tasks), len(snapshot.Tags), len(snapshot.Blockers))
 	}
-	changes, next, hasMore, err := database.Changes(ctx, user.ID, 0, 3)
+	changes, next, serverCursor, hasMore, err := database.Changes(ctx, user.ID, 0, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if serverCursor < next {
+		t.Fatalf("server cursor %d is behind page cursor %d", serverCursor, next)
+	}
 	if len(changes) != 3 || next == 0 || !hasMore {
 		t.Fatalf("unexpected changes page: count=%d next=%d has_more=%v", len(changes), next, hasMore)
+	}
+	ahead := serverCursor + 100
+	changes, next, currentCursor, hasMore, err := database.Changes(
+		ctx,
+		user.ID,
+		ahead,
+		3,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 || next != ahead || currentCursor != serverCursor || hasMore {
+		t.Fatalf(
+			"unexpected cursor-ahead page: count=%d next=%d server=%d has_more=%v",
+			len(changes),
+			next,
+			currentCursor,
+			hasMore,
+		)
 	}
 }
 

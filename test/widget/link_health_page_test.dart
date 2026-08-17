@@ -49,6 +49,7 @@ void main() {
       endpoint: Uri.parse(
         'wss://kairos.example.com/api/v1/realtime?token=secret',
       ),
+      appliedCursor: 40,
       serverCursor: 42,
       pendingOperations: 3,
     );
@@ -79,6 +80,8 @@ void main() {
     );
 
     expect(find.textContaining('token='), findsNothing);
+    expect(find.text('本机已应用游标'), findsOneWidget);
+    expect(find.text('服务端最新游标'), findsOneWidget);
     expect(
       find.textContaining('wss://kairos.example.com/api/v1/realtime'),
       findsOneWidget,

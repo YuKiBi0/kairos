@@ -96,7 +96,8 @@ void main() {
     await pumpEventQueue();
 
     expect(controller.status.lastNotificationType, 'task');
-    expect(controller.status.serverCursor, 2);
+    expect(controller.status.appliedCursor, 2);
+    expect(controller.status.serverCursor, 5);
     expect(syncCount, 2);
     expect(
       events.any(

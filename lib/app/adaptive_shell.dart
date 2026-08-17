@@ -40,7 +40,7 @@ class AdaptiveAppShell extends ConsumerWidget {
       body: Column(
         children: <Widget>[
           if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
-            _WindowsTitleBar(location: location),
+            ExcludeSemantics(child: _WindowsTitleBar(location: location)),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {

@@ -42,6 +42,21 @@
 | POST | `/sync/push` | 最多 50 个幂等 operation |
 | GET | `/sync/status` | 服务端 cursor 与设备 ID |
 
+`/sync/status` 的 `server_cursor` 是当前账户的权威高水位；客户端本地保存的是“已应用游标”，两者含义不同。每次同步必须先读取权威高水位，并在完成前追平该水位。
+
+`/sync/changes` 在单个可重复读事务中固定本页的 `server_cursor`，只返回该高水位以内的变更：
+
+```json
+{
+  "changes": [],
+  "next_cursor": 42,
+  "server_cursor": 42,
+  "has_more": false
+}
+```
+
+客户端必须验证变更 cursor 严格递增、`next_cursor` 不回退且不超过 `server_cursor`。当 `after` 高于服务端权威游标时，接口返回 HTTP 409 / `CURSOR_AHEAD`；客户端必须重新获取 snapshot，不能把空变更误判为同步完成。
+
 Push operation：
 
 ```json

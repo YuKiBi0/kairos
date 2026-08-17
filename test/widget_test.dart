@@ -8,6 +8,30 @@ import 'package:kairos/domain/entities/task.dart';
 import 'package:kairos/domain/repositories/settings_repository.dart';
 
 void main() {
+  test('disables the semantics tree only on native Windows', () {
+    const child = SizedBox();
+
+    final windows = applyPlatformSemanticsPolicy(
+      child: child,
+      isWeb: false,
+      platform: TargetPlatform.windows,
+    );
+    final web = applyPlatformSemanticsPolicy(
+      child: child,
+      isWeb: true,
+      platform: TargetPlatform.windows,
+    );
+    final android = applyPlatformSemanticsPolicy(
+      child: child,
+      isWeb: false,
+      platform: TargetPlatform.android,
+    );
+
+    expect(windows, isA<ExcludeSemantics>());
+    expect(web, same(child));
+    expect(android, same(child));
+  });
+
   test('prevents automatic tooltip overlays only on native Windows', () {
     final windowsTheme = kairosThemeForPlatform(
       isWeb: false,
