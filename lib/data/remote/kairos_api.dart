@@ -85,6 +85,19 @@ class KairosApi {
     accessToken: accessToken,
   );
 
+  Future<RemoteSyncStatus> syncStatus({
+    required Uri endpoint,
+    required String accessToken,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'GET',
+      path: '/api/v1/sync/status',
+      accessToken: accessToken,
+    );
+    return RemoteSyncStatus.fromJson(json);
+  }
+
   Future<RemoteChangesPage> changes({
     required Uri endpoint,
     required String accessToken,
@@ -104,6 +117,7 @@ class KairosApi {
           .map(RemoteChange.fromJson)
           .toList(growable: false),
       nextCursor: (json['next_cursor'] as num).toInt(),
+      serverCursor: (json['server_cursor'] as num).toInt(),
       hasMore: json['has_more'] as bool,
     );
   }

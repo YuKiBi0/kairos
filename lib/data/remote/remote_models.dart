@@ -103,12 +103,27 @@ class RemoteChangesPage {
   const RemoteChangesPage({
     required this.changes,
     required this.nextCursor,
+    required this.serverCursor,
     required this.hasMore,
   });
 
   final List<RemoteChange> changes;
   final int nextCursor;
+  final int serverCursor;
   final bool hasMore;
+}
+
+class RemoteSyncStatus {
+  const RemoteSyncStatus({required this.serverCursor, required this.deviceId});
+
+  factory RemoteSyncStatus.fromJson(Map<String, dynamic> json) =>
+      RemoteSyncStatus(
+        serverCursor: (json['server_cursor'] as num).toInt(),
+        deviceId: json['device_id'] as String,
+      );
+
+  final int serverCursor;
+  final String deviceId;
 }
 
 class PushResult {

@@ -34,6 +34,7 @@ class RealtimeStatus {
     this.retryAtUtc,
     this.retryInterval = Duration.zero,
     this.pendingOperations = 0,
+    this.appliedCursor = 0,
     this.serverCursor = 0,
     this.heartbeatSuccesses = 0,
     this.heartbeatFailures = 0,
@@ -55,6 +56,7 @@ class RealtimeStatus {
   final DateTime? retryAtUtc;
   final Duration retryInterval;
   final int pendingOperations;
+  final int appliedCursor;
   final int serverCursor;
   final int heartbeatSuccesses;
   final int heartbeatFailures;
@@ -73,6 +75,7 @@ class RealtimeStatus {
     Object? retryAtUtc = _notProvided,
     Duration? retryInterval,
     int? pendingOperations,
+    int? appliedCursor,
     int? serverCursor,
     int? heartbeatSuccesses,
     int? heartbeatFailures,
@@ -100,6 +103,7 @@ class RealtimeStatus {
         : retryAtUtc as DateTime?,
     retryInterval: retryInterval ?? this.retryInterval,
     pendingOperations: pendingOperations ?? this.pendingOperations,
+    appliedCursor: appliedCursor ?? this.appliedCursor,
     serverCursor: serverCursor ?? this.serverCursor,
     heartbeatSuccesses: heartbeatSuccesses ?? this.heartbeatSuccesses,
     heartbeatFailures: heartbeatFailures ?? this.heartbeatFailures,

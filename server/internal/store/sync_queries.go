@@ -95,20 +95,42 @@ func (s *Store) Changes(
 	userID uuid.UUID,
 	after int64,
 	limit int,
-) ([]SyncChange, int64, bool, error) {
-	rows, err := s.pool.Query(
+) ([]SyncChange, int64, int64, bool, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return nil, after, 0, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var serverCursor int64
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE user_id=$1`,
+		userID,
+	).Scan(&serverCursor); err != nil {
+		return nil, after, 0, false, err
+	}
+	if after > serverCursor {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, after, 0, false, err
+		}
+		return []SyncChange{}, after, serverCursor, false, nil
+	}
+
+	rows, err := tx.Query(
 		ctx,
 		`SELECT cursor,entity_type,entity_id,entity_version,deleted,entity
 		 FROM sync_changes
-		 WHERE user_id=$1 AND cursor>$2
+		 WHERE user_id=$1 AND cursor>$2 AND cursor<=$3
 		 ORDER BY cursor
-		 LIMIT $3`,
+		 LIMIT $4`,
 		userID,
 		after,
+		serverCursor,
 		limit+1,
 	)
 	if err != nil {
-		return nil, after, false, err
+		return nil, after, 0, false, err
 	}
 	defer rows.Close()
 	changes := make([]SyncChange, 0, limit+1)
@@ -123,7 +145,7 @@ func (s *Store) Changes(
 			&change.Deleted,
 			&entity,
 		); err != nil {
-			return nil, after, false, err
+			return nil, after, 0, false, err
 		}
 		if !change.Deleted && len(entity) > 0 {
 			change.Entity = json.RawMessage(entity)
@@ -131,8 +153,9 @@ func (s *Store) Changes(
 		changes = append(changes, change)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, after, false, err
+		return nil, after, 0, false, err
 	}
+	rows.Close()
 	hasMore := len(changes) > limit
 	if hasMore {
 		changes = changes[:limit]
@@ -141,7 +164,10 @@ func (s *Store) Changes(
 	if len(changes) > 0 {
 		next = changes[len(changes)-1].Cursor
 	}
-	return changes, next, hasMore, nil
+	if err := tx.Commit(ctx); err != nil {
+		return nil, after, 0, false, err
+	}
+	return changes, next, serverCursor, hasMore, nil
 }
 
 func (s *Store) ServerCursor(ctx context.Context, userID uuid.UUID) (int64, error) {

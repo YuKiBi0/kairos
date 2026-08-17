@@ -56,7 +56,7 @@ class _KairosAppState extends ConsumerState<KairosApp>
       isWeb: kIsWeb,
       platform: defaultTargetPlatform,
     );
-    return MaterialApp.router(
+    final app = MaterialApp.router(
       title: 'Kairos',
       debugShowCheckedModeBanner: false,
       theme: theme,
@@ -65,7 +65,28 @@ class _KairosAppState extends ConsumerState<KairosApp>
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
     );
+
+    return applyPlatformSemanticsPolicy(
+      child: app,
+      isWeb: kIsWeb,
+      platform: defaultTargetPlatform,
+    );
   }
+}
+
+@visibleForTesting
+Widget applyPlatformSemanticsPolicy({
+  required Widget child,
+  required bool isWeb,
+  required TargetPlatform platform,
+}) {
+  // Flutter 3.41 can crash the Windows AXTree while updating a complex
+  // semantics tree. Windows remains fully usable with visual, pointer, and
+  // keyboard interaction, so disable only its native accessibility bridge.
+  if (!isWeb && platform == TargetPlatform.windows) {
+    return ExcludeSemantics(child: child);
+  }
+  return child;
 }
 
 @visibleForTesting
@@ -77,8 +98,7 @@ ThemeData kairosThemeForPlatform({
     return OrganicTheme.light;
   }
   // Flutter 3.41 can crash the Windows AXTree when hover-triggered tooltip
-  // overlays are grafted into a scrollable semantics tree. Keep RawTooltip
-  // semantics, but prevent automatic overlays.
+  // overlays are grafted into a scrollable semantics tree.
   return OrganicTheme.light.copyWith(
     tooltipTheme: OrganicTheme.light.tooltipTheme.copyWith(
       triggerMode: TooltipTriggerMode.manual,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:uuid/uuid.dart';
 
@@ -98,6 +99,9 @@ class RealtimeController implements RealtimeActions {
     if (authenticated) {
       _enabled = true;
       unawaited(connect());
+      if (_online && _status.pendingOperations > 0) {
+        unawaited(synchronizeNow());
+      }
       return;
     }
     _enabled = false;
@@ -113,7 +117,11 @@ class RealtimeController implements RealtimeActions {
   }
 
   void localSyncStateChanged({required int cursor, required int pending}) {
-    _emit(_status.copyWith(serverCursor: cursor, pendingOperations: pending));
+    final previousPending = _status.pendingOperations;
+    _emit(_status.copyWith(appliedCursor: cursor, pendingOperations: pending));
+    if (_enabled && _online && pending > previousPending) {
+      unawaited(synchronizeNow());
+    }
   }
 
   Future<void> connect({bool manual = false}) async {
@@ -242,7 +250,8 @@ class RealtimeController implements RealtimeActions {
           _emit(
             _status.copyWith(
               lastIncrementalSyncAtUtc: outcome.completedAtUtc,
-              serverCursor: outcome.cursor,
+              appliedCursor: outcome.cursor,
+              serverCursor: max(_status.serverCursor, outcome.cursor),
               pendingOperations: outcome.pending,
               lastSyncResult:
                   '成功：拉取 ${outcome.pulled}，上传 ${outcome.pushed}，冲突 ${outcome.conflicts}',
@@ -305,6 +314,9 @@ class RealtimeController implements RealtimeActions {
     _addEvent('网络恢复', 'network');
     if (_enabled) {
       unawaited(connect(manual: true));
+      if (_status.pendingOperations > 0) {
+        unawaited(synchronizeNow());
+      }
     }
   }
 
@@ -338,6 +350,7 @@ class RealtimeController implements RealtimeActions {
 
   void _ready(Map<String, dynamic> message) {
     final interval = (message['heartbeat_interval_sec'] as num?)?.toInt();
+    final serverCursor = (message['server_cursor'] as num?)?.toInt();
     if (interval != null && interval > 0) {
       _heartbeatInterval = Duration(seconds: interval);
     }
@@ -347,6 +360,7 @@ class RealtimeController implements RealtimeActions {
         state: RealtimeConnectionState.healthy,
         retryAtUtc: null,
         retryInterval: Duration.zero,
+        serverCursor: serverCursor,
         lastError: null,
       ),
     );
@@ -411,6 +425,9 @@ class RealtimeController implements RealtimeActions {
       _status.copyWith(
         lastNotificationAtUtc: _now().toUtc(),
         lastNotificationType: entityType,
+        serverCursor: cursor == null
+            ? _status.serverCursor
+            : max(_status.serverCursor, cursor),
       ),
     );
     _addEvent(

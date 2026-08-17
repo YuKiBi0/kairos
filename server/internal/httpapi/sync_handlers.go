@@ -47,16 +47,26 @@ func (a *API) changes(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	items, next, hasMore, err := a.store.Changes(r.Context(), userID, after, limit)
+	items, next, serverCursor, hasMore, err := a.store.Changes(
+		r.Context(),
+		userID,
+		after,
+		limit,
+	)
 	if err != nil {
 		a.logger.ErrorContext(r.Context(), "changes_failed", "request_id", requestID(r.Context()))
 		writeError(w, r, http.StatusInternalServerError, "SYNC_FAILED", "无法读取增量变更")
 		return
 	}
+	if after > serverCursor {
+		writeError(w, r, http.StatusConflict, "CURSOR_AHEAD", "本机游标高于服务端，请重新获取同步快照")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"changes":     items,
-		"next_cursor": next,
-		"has_more":    hasMore,
+		"changes":       items,
+		"next_cursor":   next,
+		"server_cursor": serverCursor,
+		"has_more":      hasMore,
 	})
 }
 

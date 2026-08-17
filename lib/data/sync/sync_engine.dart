@@ -64,17 +64,33 @@ class SyncEngine {
       }
       final endpoint = Uri.parse(endpointRaw);
       await _ensureSyncState();
-      if (!await _snapshotCompleted()) {
-        final snapshot = await _api.snapshot(
-          endpoint: endpoint,
-          accessToken: accessToken,
-        );
-        await _applySnapshot(snapshot);
+      var status = await _api.syncStatus(
+        endpoint: endpoint,
+        accessToken: accessToken,
+      );
+      final initialState = await _syncState();
+      if (initialState.serverCursor > status.serverCursor ||
+          !await _snapshotCompleted()) {
+        await _refreshSnapshot(endpoint, accessToken);
       }
-      var pulled = await _pull(endpoint, accessToken);
+      var pulled = await _pullToCursor(
+        endpoint,
+        accessToken,
+        status.serverCursor,
+      );
       final push = await _push(endpoint, accessToken);
-      pulled += await _pull(endpoint, accessToken);
+      status = await _api.syncStatus(
+        endpoint: endpoint,
+        accessToken: accessToken,
+      );
+      pulled += await _pullToCursor(endpoint, accessToken, status.serverCursor);
       final state = await _syncState();
+      if (state.serverCursor < status.serverCursor) {
+        throw StateError(
+          'Sync stopped at cursor ${state.serverCursor} before '
+          'server cursor ${status.serverCursor}.',
+        );
+      }
       return SyncOutcome(
         pulled: pulled,
         pushed: push.applied,
@@ -169,23 +185,43 @@ class SyncEngine {
     return row?.value == 'true';
   }
 
+  Future<void> _refreshSnapshot(Uri endpoint, String accessToken) async {
+    final snapshot = await _api.snapshot(
+      endpoint: endpoint,
+      accessToken: accessToken,
+    );
+    await _applySnapshot(snapshot);
+  }
+
   Future<void> _applySnapshot(Map<String, dynamic> snapshot) =>
       _database.transaction(() async {
-        for (final entity in _entityList(snapshot, 'tags')) {
+        final tags = _entityList(snapshot, 'tags');
+        final projects = _entityList(snapshot, 'projects');
+        final checklistGroups = _entityList(snapshot, 'checklist_groups');
+        final tasks = _entityList(snapshot, 'tasks');
+        final blockers = _entityList(snapshot, 'blockers');
+        for (final entity in tags) {
           await _applyEntity('tag', entity, deleted: false);
         }
-        for (final entity in _entityList(snapshot, 'projects')) {
+        for (final entity in projects) {
           await _applyEntity('project', entity, deleted: false);
         }
-        for (final entity in _entityList(snapshot, 'checklist_groups')) {
+        for (final entity in checklistGroups) {
           await _applyEntity('checklist_group', entity, deleted: false);
         }
-        for (final entity in _entityList(snapshot, 'tasks')) {
+        for (final entity in tasks) {
           await _applyEntity('task', entity, deleted: false);
         }
-        for (final entity in _entityList(snapshot, 'blockers')) {
+        for (final entity in blockers) {
           await _applyEntity('blocker', entity, deleted: false);
         }
+        await _removeSnapshotOrphans(
+          taskIds: _entityIds(tasks),
+          blockerIds: _entityIds(blockers),
+          tagIds: _entityIds(tags),
+          projectIds: _entityIds(projects),
+          checklistGroupIds: _entityIds(checklistGroups),
+        );
         final cursor = (snapshot['cursor'] as num).toInt();
         await (_database.update(
           _database.syncStates,
@@ -205,8 +241,100 @@ class SyncEngine {
             );
       });
 
-  Future<int> _pull(Uri endpoint, String accessToken) async {
+  Future<void> _removeSnapshotOrphans({
+    required Set<String> taskIds,
+    required Set<String> blockerIds,
+    required Set<String> tagIds,
+    required Set<String> projectIds,
+    required Set<String> checklistGroupIds,
+  }) async {
+    final outbox = await _database.select(_database.outboxOperations).get();
+    final protected = <String>{
+      for (final operation in outbox)
+        '${operation.entityType}:${operation.entityId}',
+    };
+
+    final tasks = await _database.select(_database.localTasks).get();
+    for (final task in tasks) {
+      if (taskIds.contains(task.id) ||
+          task.dirty ||
+          protected.contains('task:${task.id}')) {
+        continue;
+      }
+      await (_database.delete(
+        _database.taskTags,
+      )..where((table) => table.taskId.equals(task.id))).go();
+      await (_database.delete(
+        _database.localTasks,
+      )..where((table) => table.id.equals(task.id))).go();
+    }
+
+    final blockers = await _database.select(_database.localBlockers).get();
+    for (final blocker in blockers) {
+      if (!blockerIds.contains(blocker.id) &&
+          !protected.contains('blocker:${blocker.id}')) {
+        await (_database.delete(
+          _database.localBlockers,
+        )..where((table) => table.id.equals(blocker.id))).go();
+      }
+    }
+
+    final tags = await _database.select(_database.localTags).get();
+    for (final tag in tags) {
+      if (!tagIds.contains(tag.id) && !protected.contains('tag:${tag.id}')) {
+        await (_database.delete(
+          _database.taskTags,
+        )..where((table) => table.tagId.equals(tag.id))).go();
+        await (_database.delete(
+          _database.localTags,
+        )..where((table) => table.id.equals(tag.id))).go();
+      }
+    }
+
+    final projects = await _database.select(_database.localProjects).get();
+    for (final project in projects) {
+      if (!projectIds.contains(project.id) &&
+          !protected.contains('project:${project.id}')) {
+        await (_database.delete(
+          _database.localProjects,
+        )..where((table) => table.id.equals(project.id))).go();
+      }
+    }
+
+    final groups = await _database.select(_database.localChecklistGroups).get();
+    for (final group in groups) {
+      if (!checklistGroupIds.contains(group.id) &&
+          !protected.contains('checklist_group:${group.id}')) {
+        await (_database.delete(
+          _database.localChecklistGroups,
+        )..where((table) => table.id.equals(group.id))).go();
+      }
+    }
+  }
+
+  Future<int> _pullToCursor(
+    Uri endpoint,
+    String accessToken,
+    int minimumCursor,
+  ) async {
+    try {
+      return await _pull(endpoint, accessToken, minimumCursor);
+    } on ApiFailure catch (error) {
+      if (error.code != 'CURSOR_AHEAD') {
+        rethrow;
+      }
+      await _refreshSnapshot(endpoint, accessToken);
+      final status = await _api.syncStatus(
+        endpoint: endpoint,
+        accessToken: accessToken,
+      );
+      return _pull(endpoint, accessToken, status.serverCursor);
+    }
+  }
+
+  Future<int> _pull(Uri endpoint, String accessToken, int minimumCursor) async {
     var cursor = (await _syncState()).serverCursor;
+    var targetCursor = minimumCursor;
     var count = 0;
     while (true) {
       final page = await _api.changes(
@@ -214,6 +342,10 @@ class SyncEngine {
         accessToken: accessToken,
         after: cursor,
       );
+      _validateChangesPage(page, after: cursor);
+      if (page.serverCursor > targetCursor) {
+        targetCursor = page.serverCursor;
+      }
       await _database.transaction(() async {
         for (final change in page.changes) {
           if (change.deleted) {
@@ -238,8 +370,43 @@ class SyncEngine {
       count += page.changes.length;
       cursor = page.nextCursor;
       if (!page.hasMore) {
+        if (cursor < targetCursor) {
+          throw StateError(
+            'Sync cursor gap: page stopped at $cursor before '
+            'server cursor $targetCursor.',
+          );
+        }
         return count;
       }
+    }
+  }
+
+  void _validateChangesPage(RemoteChangesPage page, {required int after}) {
+    if (page.serverCursor < after ||
+        page.nextCursor < after ||
+        page.nextCursor > page.serverCursor) {
+      throw StateError(
+        'Invalid sync cursor range: after=$after, '
+        'next=${page.nextCursor}, server=${page.serverCursor}.',
+      );
+    }
+    var previous = after;
+    for (final change in page.changes) {
+      if (change.cursor <= previous || change.cursor > page.nextCursor) {
+        throw StateError(
+          'Sync changes are not strictly ordered at cursor ${change.cursor}.',
+        );
+      }
+      previous = change.cursor;
+    }
+    if (page.changes.isEmpty && page.nextCursor != after) {
+      throw StateError('An empty sync page advanced the cursor.');
+    }
+    if (page.changes.isNotEmpty && previous != page.nextCursor) {
+      throw StateError('Sync page cursor does not match its last change.');
+    }
+    if (page.hasMore && page.changes.isEmpty) {
+      throw StateError('A paged sync response did not make progress.');
     }
   }
 
@@ -600,6 +767,10 @@ class SyncEngine {
     String key,
   ) => (source[key] as List<dynamic>? ?? const <dynamic>[])
       .cast<Map<String, dynamic>>();
+
+  Set<String> _entityIds(List<Map<String, dynamic>> entities) => <String>{
+    for (final entity in entities) entity['id'] as String,
+  };
 
   DateTime? _time(Object? value) =>
       value == null ? null : DateTime.parse(value as String).toUtc();
