@@ -159,6 +159,9 @@ func TestRealtimeHintTriggersHTTPChanges(t *testing.T) {
 	if !bytes.Contains(encodedChanges, []byte("Realtime private title")) {
 		t.Fatalf("HTTP changes omitted task data: %s", encodedChanges)
 	}
+	if _, ok := changes["server_cursor"].(float64); !ok {
+		t.Fatalf("HTTP changes omitted authoritative server cursor: %#v", changes)
+	}
 }
 
 func requestJSON(

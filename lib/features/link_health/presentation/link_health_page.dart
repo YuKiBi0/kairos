@@ -221,7 +221,8 @@ class _SyncSummary extends StatelessWidget {
               ? '尚未完成增量同步'
               : _formatTime(status.lastIncrementalSyncAtUtc!),
         ),
-        _MetricRow(label: '服务端游标', value: '${status.serverCursor}'),
+        _MetricRow(label: '本机已应用游标', value: '${status.appliedCursor}'),
+        _MetricRow(label: '服务端最新游标', value: '${status.serverCursor}'),
         _MetricRow(label: '待上传操作', value: '${status.pendingOperations}'),
         _MetricRow(label: '最近结果', value: status.lastSyncResult ?? '尚无同步结果'),
         _MetricRow(
@@ -340,6 +341,7 @@ class _EndpointInfo extends StatelessWidget {
       'reconnect_count=${status.reconnectCount}',
       'heartbeat_successes=${status.heartbeatSuccesses}',
       'heartbeat_failures=${status.heartbeatFailures}',
+      'applied_cursor=${status.appliedCursor}',
       'server_cursor=${status.serverCursor}',
       'pending_operations=${status.pendingOperations}',
       'error_code=${status.lastError?.code ?? 'none'}',

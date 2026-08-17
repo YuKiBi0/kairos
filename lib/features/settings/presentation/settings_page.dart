@@ -108,7 +108,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                       localSync.when(
                         data: (state) => Text(
-                          '服务端游标 ${state?.serverCursor ?? 0} · '
+                          '本机已应用游标 ${state?.serverCursor ?? 0} · '
                           '待上传 ${state?.pendingCount ?? 0}',
                         ),
                         error: (error, _) => Text('无法读取同步状态：$error'),
