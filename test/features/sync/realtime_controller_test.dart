@@ -184,6 +184,46 @@ void main() {
     expect(controller.status.state, RealtimeConnectionState.authExpired);
     expect(connector.sockets, isEmpty);
   });
+
+  test('syncs immediately when a local operation enters the outbox', () async {
+    controller.authStateChanged(_authenticatedState());
+    await pumpEventQueue();
+
+    controller.localSyncStateChanged(cursor: 0, pending: 1);
+    await pumpEventQueue();
+
+    expect(syncCount, 1);
+    expect(controller.status.pendingOperations, 0);
+  });
+
+  test('uploads pending local operations when the network recovers', () async {
+    controller.authStateChanged(_authenticatedState());
+    await pumpEventQueue();
+    network.add(false);
+    await pumpEventQueue();
+
+    controller.localSyncStateChanged(cursor: 0, pending: 1);
+    await pumpEventQueue();
+    expect(syncCount, 0);
+
+    network.add(true);
+    await pumpEventQueue();
+
+    expect(syncCount, 1);
+    expect(controller.status.pendingOperations, 0);
+  });
+
+  test('uploads pending local operations after authentication', () async {
+    controller.localSyncStateChanged(cursor: 0, pending: 1);
+    await pumpEventQueue();
+    expect(syncCount, 0);
+
+    controller.authStateChanged(_authenticatedState());
+    await pumpEventQueue();
+
+    expect(syncCount, 1);
+    expect(controller.status.pendingOperations, 0);
+  });
 }
 
 AuthState _authenticatedState() => AuthState(
