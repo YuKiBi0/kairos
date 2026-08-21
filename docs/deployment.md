@@ -63,7 +63,11 @@ go run ./cmd/kairos-server --env-file /etc/kairos/kairos.env create-user
 go run ./cmd/kairos-server --env-file /etc/kairos/kairos.env serve
 ```
 
-`migrate` 只需在首次部署或数据库结构更新时执行；`create-user` 通常只执行一次；`serve` 是持续运行的服务。
+`migrate` 数据库初始化，只需在首次部署或数据库结构更新时执行；
+
+`create-user` 用于创建账号，通常只执行一次，也可以创建多个账号。账号名与密码会根据传入的env环境文件来创建；
+
+`serve` 是正式的持续运行的服务。
 
 ## 4. 编译后二进制运行
 
