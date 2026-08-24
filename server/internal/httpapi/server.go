@@ -87,6 +87,10 @@ func NewWithRedis(
 	router.Route("/api/v2", func(v2 chi.Router) {
 		v2.Group(func(protected chi.Router) {
 			protected.Use(api.authenticate)
+			protected.Get("/workspaces/{workspace_id}/sync/snapshot", api.workspaceSnapshot)
+			protected.Get("/workspaces/{workspace_id}/sync/changes", api.workspaceChanges)
+			protected.Post("/workspaces/{workspace_id}/sync/push", api.workspacePush)
+			protected.Get("/workspaces/{workspace_id}/sync/status", api.workspaceSyncStatus)
 			protected.Get("/workspaces", api.workspaces)
 			protected.Post("/groups", api.createGroup)
 			protected.Get("/groups/{group_id}", api.groupDetail)

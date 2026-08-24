@@ -29,7 +29,7 @@ type blockerRecord struct {
 func (s *Store) applyBlockerOperation(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	userID, workspaceID uuid.UUID,
 	operation PushOperation,
 ) (OperationResult, error) {
 	var current blockerRecord
@@ -38,8 +38,8 @@ func (s *Store) applyBlockerOperation(
 		ctx,
 		`SELECT id, task_id, body, resolved, resolved_at, version,
 		        field_versions, deleted_at, created_at, updated_at
-		 FROM blockers WHERE user_id=$1 AND id=$2 FOR UPDATE`,
-		userID,
+			 FROM blockers WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
+		workspaceID,
 		operation.EntityID,
 	).Scan(
 		&current.ID,
@@ -75,7 +75,7 @@ func (s *Store) applyBlockerOperation(
 		}
 		conflicts := conflictingFields(current.Version, current.FieldVersions, operation)
 		if len(conflicts) > 0 {
-			entity, err := s.blockerJSON(ctx, tx, userID, current.ID)
+			entity, err := s.blockerJSON(ctx, tx, workspaceID, current.ID)
 			if err != nil {
 				return OperationResult{}, err
 			}
@@ -143,9 +143,9 @@ func (s *Store) applyBlockerOperation(
 	if err := tx.QueryRow(
 		ctx,
 		`SELECT EXISTS(
-		   SELECT 1 FROM tasks WHERE user_id=$1 AND id=$2 AND deleted_at IS NULL
+			   SELECT 1 FROM tasks WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL
 		 )`,
-		userID,
+		workspaceID,
 		current.TaskID,
 	).Scan(&taskExists); err != nil {
 		return OperationResult{}, err
@@ -174,11 +174,12 @@ func (s *Store) applyBlockerOperation(
 		_, err = tx.Exec(
 			ctx,
 			`INSERT INTO blockers(
-			   id,user_id,task_id,body,resolved,resolved_at,version,field_versions,
+			   id,user_id,workspace_id,task_id,body,resolved,resolved_at,version,field_versions,
 			   deleted_at,created_at,updated_at
-			 ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			 ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 			current.ID,
 			userID,
+			workspaceID,
 			current.TaskID,
 			current.Body,
 			current.Resolved,
@@ -195,8 +196,8 @@ func (s *Store) applyBlockerOperation(
 			`UPDATE blockers SET
 			   task_id=$3,body=$4,resolved=$5,resolved_at=$6,version=$7,
 			   field_versions=$8,deleted_at=$9,updated_at=$10
-			 WHERE user_id=$1 AND id=$2`,
-			userID,
+			 WHERE workspace_id=$1 AND id=$2`,
+			workspaceID,
 			current.ID,
 			current.TaskID,
 			current.Body,
@@ -211,7 +212,7 @@ func (s *Store) applyBlockerOperation(
 	if err != nil {
 		return OperationResult{}, err
 	}
-	entity, err := s.blockerJSON(ctx, tx, userID, current.ID)
+	entity, err := s.blockerJSON(ctx, tx, workspaceID, current.ID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -219,6 +220,7 @@ func (s *Store) applyBlockerOperation(
 		ctx,
 		tx,
 		userID,
+		workspaceID,
 		"blocker",
 		current.ID,
 		current.Version,
@@ -242,14 +244,14 @@ func (s *Store) applyBlockerOperation(
 func (s *Store) blockerJSON(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID, blockerID uuid.UUID,
+	workspaceID, blockerID uuid.UUID,
 ) (json.RawMessage, error) {
 	var entity []byte
 	err := tx.QueryRow(
 		ctx,
-		`SELECT to_jsonb(blocker_row) - 'user_id' - 'field_versions'
-		 FROM blockers blocker_row WHERE user_id=$1 AND id=$2`,
-		userID,
+		`SELECT to_jsonb(blocker_row) - 'user_id' - 'workspace_id' - 'field_versions'
+		 FROM blockers blocker_row WHERE workspace_id=$1 AND id=$2`,
+		workspaceID,
 		blockerID,
 	).Scan(&entity)
 	return entity, err
@@ -268,10 +270,10 @@ type taxonomyRecord struct {
 func (s *Store) applyTaxonomyOperation(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	userID, workspaceID uuid.UUID,
 	operation PushOperation,
 ) (OperationResult, error) {
-	current, err := loadTaxonomy(ctx, tx, userID, operation.EntityType, operation.EntityID)
+	current, err := loadTaxonomy(ctx, tx, workspaceID, operation.EntityType, operation.EntityID)
 	creating := errors.Is(err, pgx.ErrNoRows)
 	if err != nil && !creating {
 		return OperationResult{}, err
@@ -288,7 +290,7 @@ func (s *Store) applyTaxonomyOperation(
 	} else {
 		conflicts := conflictingFields(current.Version, current.FieldVersions, operation)
 		if len(conflicts) > 0 {
-			entity, err := taxonomyJSON(ctx, tx, userID, operation.EntityType, current.ID)
+			entity, err := taxonomyJSON(ctx, tx, workspaceID, operation.EntityType, current.ID)
 			if err != nil {
 				return OperationResult{}, err
 			}
@@ -340,20 +342,20 @@ func (s *Store) applyTaxonomyOperation(
 		current.FieldVersions[field] = current.Version
 	}
 	current.FieldVersions["updated_at"] = current.Version
-	if err := writeTaxonomy(ctx, tx, userID, operation.EntityType, current, creating); err != nil {
+	if err := writeTaxonomy(ctx, tx, userID, workspaceID, operation.EntityType, current, creating); err != nil {
 		return OperationResult{}, err
 	}
 	if deleted && operation.EntityType == "tag" {
 		if _, err := tx.Exec(
 			ctx,
-			`DELETE FROM task_tags WHERE user_id=$1 AND tag_id=$2`,
-			userID,
+			`DELETE FROM task_tags WHERE workspace_id=$1 AND tag_id=$2`,
+			workspaceID,
 			current.ID,
 		); err != nil {
 			return OperationResult{}, err
 		}
 	}
-	entity, err := taxonomyJSON(ctx, tx, userID, operation.EntityType, current.ID)
+	entity, err := taxonomyJSON(ctx, tx, workspaceID, operation.EntityType, current.ID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -361,6 +363,7 @@ func (s *Store) applyTaxonomyOperation(
 		ctx,
 		tx,
 		userID,
+		workspaceID,
 		operation.EntityType,
 		current.ID,
 		current.Version,
@@ -384,7 +387,7 @@ func (s *Store) applyTaxonomyOperation(
 func loadTaxonomy(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	workspaceID uuid.UUID,
 	entityType string,
 	entityID uuid.UUID,
 ) (taxonomyRecord, error) {
@@ -392,19 +395,19 @@ func loadTaxonomy(
 	switch entityType {
 	case "tag":
 		query = `SELECT id,name,color_token,archived,version,field_versions,updated_at
-		 FROM tags WHERE user_id=$1 AND id=$2 FOR UPDATE`
+		 FROM tags WHERE workspace_id=$1 AND id=$2 FOR UPDATE`
 	case "project":
 		query = `SELECT id,name,NULL::text,archived,version,field_versions,updated_at
-		 FROM projects WHERE user_id=$1 AND id=$2 FOR UPDATE`
+		 FROM projects WHERE workspace_id=$1 AND id=$2 FOR UPDATE`
 	case "checklist_group":
 		query = `SELECT id,name,NULL::text,archived,version,field_versions,updated_at
-		 FROM checklist_groups WHERE user_id=$1 AND id=$2 FOR UPDATE`
+		 FROM checklist_groups WHERE workspace_id=$1 AND id=$2 FOR UPDATE`
 	default:
 		return taxonomyRecord{}, operationRejection{"UNSUPPORTED_ENTITY", "unsupported taxonomy entity"}
 	}
 	var current taxonomyRecord
 	var encoded []byte
-	err := tx.QueryRow(ctx, query, userID, entityID).Scan(
+	err := tx.QueryRow(ctx, query, workspaceID, entityID).Scan(
 		&current.ID,
 		&current.Name,
 		&current.ColorToken,
@@ -426,7 +429,7 @@ func loadTaxonomy(
 func writeTaxonomy(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	userID, workspaceID uuid.UUID,
 	entityType string,
 	current taxonomyRecord,
 	creating bool,
@@ -440,15 +443,15 @@ func writeTaxonomy(
 	if entityType == "tag" {
 		if creating {
 			query = `INSERT INTO tags(
-			 id,user_id,name,color_token,archived,version,field_versions,updated_at
-			) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`
+				 id,user_id,workspace_id,name,color_token,archived,version,field_versions,updated_at
+			) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`
 		} else {
 			query = `UPDATE tags SET name=$3,color_token=$4,archived=$5,
 			 version=$6,field_versions=$7,updated_at=$8
-			 WHERE id=$1 AND user_id=$2`
+				 WHERE id=$1 AND workspace_id=$2`
 		}
 		arguments = []any{
-			current.ID, userID, current.Name, current.ColorToken, current.Archived,
+			current.ID, userID, workspaceID, current.Name, current.ColorToken, current.Archived,
 			current.Version, encoded, current.UpdatedAt,
 		}
 	} else {
@@ -458,19 +461,19 @@ func writeTaxonomy(
 		}
 		if creating {
 			query = fmt.Sprintf(
-				`INSERT INTO %s(id,user_id,name,archived,version,field_versions,updated_at)
-				 VALUES($1,$2,$3,$4,$5,$6,$7)`,
+				`INSERT INTO %s(id,user_id,workspace_id,name,archived,version,field_versions,updated_at)
+				 VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
 				table,
 			)
 		} else {
 			query = fmt.Sprintf(
 				`UPDATE %s SET name=$3,archived=$4,version=$5,field_versions=$6,
-				 updated_at=$7 WHERE id=$1 AND user_id=$2`,
+				 updated_at=$8 WHERE id=$1 AND workspace_id=$2`,
 				table,
 			)
 		}
 		arguments = []any{
-			current.ID, userID, current.Name, current.Archived,
+			current.ID, userID, workspaceID, current.Name, current.Archived,
 			current.Version, encoded, current.UpdatedAt,
 		}
 	}
@@ -481,7 +484,7 @@ func writeTaxonomy(
 func taxonomyJSON(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	workspaceID uuid.UUID,
 	entityType string,
 	entityID uuid.UUID,
 ) (json.RawMessage, error) {
@@ -497,11 +500,11 @@ func taxonomyJSON(
 		return nil, errors.New("unsupported taxonomy entity")
 	}
 	query := fmt.Sprintf(
-		`SELECT to_jsonb(entity_row) - 'user_id' - 'field_versions'
-		 FROM %s entity_row WHERE user_id=$1 AND id=$2`,
+		`SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
+		 FROM %s entity_row WHERE workspace_id=$1 AND id=$2`,
 		table,
 	)
 	var entity []byte
-	err := tx.QueryRow(ctx, query, userID, entityID).Scan(&entity)
+	err := tx.QueryRow(ctx, query, workspaceID, entityID).Scan(&entity)
 	return entity, err
 }

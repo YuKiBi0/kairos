@@ -27,6 +27,18 @@ func (s *Store) ApplyOperation(
 	userID, deviceID uuid.UUID,
 	operation PushOperation,
 ) (OperationResult, error) {
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	return s.ApplyWorkspaceOperation(ctx, userID, deviceID, workspaceID, operation)
+}
+
+func (s *Store) ApplyWorkspaceOperation(
+	ctx context.Context,
+	userID, deviceID, workspaceID uuid.UUID,
+	operation PushOperation,
+) (OperationResult, error) {
 	base := OperationResult{
 		OperationID: operation.OperationID,
 		EntityType:  operation.EntityType,
@@ -48,8 +60,8 @@ func (s *Store) ApplyOperation(
 	err = tx.QueryRow(
 		ctx,
 		`SELECT result FROM sync_operations
-		 WHERE user_id = $1 AND operation_id = $2`,
-		userID,
+		 WHERE workspace_id = $1 AND operation_id = $2`,
+		workspaceID,
 		operation.OperationID,
 	).Scan(&previous)
 	if err == nil {
@@ -67,11 +79,11 @@ func (s *Store) ApplyOperation(
 	var result OperationResult
 	switch operation.EntityType {
 	case "task":
-		result, err = s.applyTaskOperation(ctx, tx, userID, deviceID, operation)
+		result, err = s.applyTaskOperation(ctx, tx, userID, deviceID, workspaceID, operation)
 	case "blocker":
-		result, err = s.applyBlockerOperation(ctx, tx, userID, operation)
+		result, err = s.applyBlockerOperation(ctx, tx, userID, workspaceID, operation)
 	case "tag", "project", "checklist_group":
-		result, err = s.applyTaxonomyOperation(ctx, tx, userID, operation)
+		result, err = s.applyTaxonomyOperation(ctx, tx, userID, workspaceID, operation)
 	default:
 		result = base
 		result.Status = "rejected"
@@ -95,9 +107,10 @@ func (s *Store) ApplyOperation(
 	}
 	if _, err := tx.Exec(
 		ctx,
-		`INSERT INTO sync_operations(user_id, operation_id, result)
-		 VALUES($1, $2, $3)`,
+		`INSERT INTO sync_operations(user_id, workspace_id, operation_id, result)
+		 VALUES($1, $2, $3, $4)`,
 		userID,
+		workspaceID,
 		operation.OperationID,
 		encoded,
 	); err != nil {
@@ -171,7 +184,7 @@ func scanTask(row rowScanner) (taskRecord, error) {
 func (s *Store) applyTaskOperation(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID, deviceID uuid.UUID,
+	userID, deviceID, workspaceID uuid.UUID,
 	operation PushOperation,
 ) (OperationResult, error) {
 	current, err := scanTask(tx.QueryRow(
@@ -181,9 +194,9 @@ func (s *Store) applyTaskOperation(
 		        field_versions, deleted_at, created_at, updated_at, completed_at,
 		        updated_by_device_id
 		 FROM tasks
-		 WHERE user_id = $1 AND id = $2
-		 FOR UPDATE`,
-		userID,
+			 WHERE workspace_id = $1 AND id = $2
+			 FOR UPDATE`,
+		workspaceID,
 		operation.EntityID,
 	))
 	creating := errors.Is(err, pgx.ErrNoRows)
@@ -207,7 +220,7 @@ func (s *Store) applyTaskOperation(
 			UpdatedByDevice: deviceID,
 		}
 	} else {
-		entity, err := s.taskJSON(ctx, tx, userID, current.ID)
+		entity, err := s.taskJSON(ctx, tx, workspaceID, current.ID)
 		if err != nil {
 			return OperationResult{}, err
 		}
@@ -241,14 +254,14 @@ func (s *Store) applyTaskOperation(
 	if current.Quadrant < 1 || current.Quadrant > 4 || current.Status < 0 || current.Status > 3 {
 		return OperationResult{}, operationRejection{"VALIDATION_ERROR", "task enum value is invalid"}
 	}
-	if err := s.validateOwnedReference(ctx, tx, "projects", userID, current.ProjectID); err != nil {
+	if err := s.validateOwnedReference(ctx, tx, "projects", workspaceID, current.ProjectID); err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.validateOwnedReference(ctx, tx, "checklist_groups", userID, current.ChecklistGroupID); err != nil {
+	if err := s.validateOwnedReference(ctx, tx, "checklist_groups", workspaceID, current.ChecklistGroupID); err != nil {
 		return OperationResult{}, err
 	}
 
-	nodes, err := s.taskNodes(ctx, tx, userID)
+	nodes, err := s.taskNodes(ctx, tx, workspaceID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -295,14 +308,14 @@ func (s *Store) applyTaskOperation(
 		_, err = tx.Exec(
 			ctx,
 			`INSERT INTO tasks(
-			   id, user_id, parent_id, title, description, quadrant, status,
+			   id, user_id, workspace_id, parent_id, title, description, quadrant, status,
 			   due_at, depth, sort_order, project_id, checklist_group_id,
 			   version, field_versions, deleted_at, created_at, updated_at,
 			   completed_at, updated_by_device_id
 			 ) VALUES(
-			   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+			   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
 			 )`,
-			current.ID, userID, current.ParentID, current.Title, current.Description,
+			current.ID, userID, workspaceID, current.ParentID, current.Title, current.Description,
 			current.Quadrant, current.Status, current.DueAt, current.Depth,
 			current.SortOrder, current.ProjectID, current.ChecklistGroupID,
 			current.Version, fieldVersions, current.DeletedAt, current.CreatedAt,
@@ -317,8 +330,8 @@ func (s *Store) applyTaskOperation(
 			   checklist_group_id=$12, version=$13, field_versions=$14,
 			   deleted_at=$15, updated_at=$16, completed_at=$17,
 			   updated_by_device_id=$18
-			 WHERE user_id=$1 AND id=$2`,
-			userID, current.ID, current.ParentID, current.Title, current.Description,
+				 WHERE workspace_id=$1 AND id=$2`,
+			workspaceID, current.ID, current.ParentID, current.Title, current.Description,
 			current.Quadrant, current.Status, current.DueAt, current.Depth,
 			current.SortOrder, current.ProjectID, current.ChecklistGroupID,
 			current.Version, fieldVersions, current.DeletedAt, current.UpdatedAt,
@@ -329,16 +342,16 @@ func (s *Store) applyTaskOperation(
 		return OperationResult{}, err
 	}
 	if depthDelta != 0 {
-		if err := s.updateDescendantDepths(ctx, tx, userID, current.ID, depthDelta); err != nil {
+		if err := s.updateDescendantDepths(ctx, tx, userID, workspaceID, current.ID, depthDelta); err != nil {
 			return OperationResult{}, err
 		}
 	}
 	if contains(changedFields, "tag_ids") {
-		if err := s.replaceTaskTags(ctx, tx, userID, current.ID, current.TagIDs); err != nil {
+		if err := s.replaceTaskTags(ctx, tx, userID, workspaceID, current.ID, current.TagIDs); err != nil {
 			return OperationResult{}, err
 		}
 	}
-	entity, err := s.taskJSON(ctx, tx, userID, current.ID)
+	entity, err := s.taskJSON(ctx, tx, workspaceID, current.ID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -346,6 +359,7 @@ func (s *Store) applyTaskOperation(
 		ctx,
 		tx,
 		userID,
+		workspaceID,
 		"task",
 		current.ID,
 		current.Version,
@@ -529,13 +543,13 @@ func decodeTime(raw json.RawMessage, target **time.Time) error {
 func (s *Store) taskNodes(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	workspaceID uuid.UUID,
 ) ([]tasks.Node, error) {
 	rows, err := tx.Query(
 		ctx,
 		`SELECT id, parent_id, depth FROM tasks
-		 WHERE user_id = $1 AND deleted_at IS NULL`,
-		userID,
+			 WHERE workspace_id = $1 AND deleted_at IS NULL`,
+		workspaceID,
 	)
 	if err != nil {
 		return nil, err
@@ -573,7 +587,7 @@ func (s *Store) validateOwnedReference(
 	ctx context.Context,
 	tx pgx.Tx,
 	table string,
-	userID uuid.UUID,
+	workspaceID uuid.UUID,
 	entityID *uuid.UUID,
 ) error {
 	if entityID == nil {
@@ -582,14 +596,14 @@ func (s *Store) validateOwnedReference(
 	query := ""
 	switch table {
 	case "projects":
-		query = `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2)`
+		query = `SELECT EXISTS(SELECT 1 FROM projects WHERE workspace_id=$1 AND id=$2)`
 	case "checklist_groups":
-		query = `SELECT EXISTS(SELECT 1 FROM checklist_groups WHERE user_id=$1 AND id=$2)`
+		query = `SELECT EXISTS(SELECT 1 FROM checklist_groups WHERE workspace_id=$1 AND id=$2)`
 	default:
 		return errors.New("invalid owned reference table")
 	}
 	var exists bool
-	if err := tx.QueryRow(ctx, query, userID, *entityID).Scan(&exists); err != nil {
+	if err := tx.QueryRow(ctx, query, workspaceID, *entityID).Scan(&exists); err != nil {
 		return err
 	}
 	if !exists {
@@ -601,17 +615,17 @@ func (s *Store) validateOwnedReference(
 func (s *Store) updateDescendantDepths(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID, rootID uuid.UUID,
+	userID, workspaceID, rootID uuid.UUID,
 	delta int,
 ) error {
 	rows, err := tx.Query(
 		ctx,
 		`WITH RECURSIVE descendants AS (
-		   SELECT id FROM tasks WHERE user_id=$1 AND parent_id=$2
+		   SELECT id FROM tasks WHERE workspace_id=$1 AND parent_id=$2
 		   UNION ALL
 		   SELECT child.id FROM tasks child
 		   JOIN descendants parent ON child.parent_id=parent.id
-		   WHERE child.user_id=$1
+		   WHERE child.workspace_id=$1
 		 )
 		 UPDATE tasks SET
 		   depth=depth+$3,
@@ -620,9 +634,9 @@ func (s *Store) updateDescendantDepths(
 		   field_versions=jsonb_set(
 		     field_versions, '{depth}', to_jsonb(version+1), true
 		   )
-		 WHERE user_id=$1 AND id IN (SELECT id FROM descendants)
+		 WHERE workspace_id=$1 AND id IN (SELECT id FROM descendants)
 		 RETURNING id, version`,
-		userID,
+		workspaceID,
 		rootID,
 		delta,
 	)
@@ -646,7 +660,7 @@ func (s *Store) updateDescendantDepths(
 		return err
 	}
 	for _, item := range changedRows {
-		entity, err := s.taskJSON(ctx, tx, userID, item.id)
+		entity, err := s.taskJSON(ctx, tx, workspaceID, item.id)
 		if err != nil {
 			return err
 		}
@@ -654,6 +668,7 @@ func (s *Store) updateDescendantDepths(
 			ctx,
 			tx,
 			userID,
+			workspaceID,
 			"task",
 			item.id,
 			item.version,
@@ -669,13 +684,13 @@ func (s *Store) updateDescendantDepths(
 func (s *Store) replaceTaskTags(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID, taskID uuid.UUID,
+	userID, workspaceID, taskID uuid.UUID,
 	tagIDs []uuid.UUID,
 ) error {
 	if _, err := tx.Exec(
 		ctx,
-		`DELETE FROM task_tags WHERE user_id=$1 AND task_id=$2`,
-		userID,
+		`DELETE FROM task_tags WHERE workspace_id=$1 AND task_id=$2`,
+		workspaceID,
 		taskID,
 	); err != nil {
 		return err
@@ -684,8 +699,8 @@ func (s *Store) replaceTaskTags(
 		var exists bool
 		if err := tx.QueryRow(
 			ctx,
-			`SELECT EXISTS(SELECT 1 FROM tags WHERE user_id=$1 AND id=$2 AND archived=false)`,
-			userID,
+			`SELECT EXISTS(SELECT 1 FROM tags WHERE workspace_id=$1 AND id=$2 AND archived=false)`,
+			workspaceID,
 			tagID,
 		).Scan(&exists); err != nil {
 			return err
@@ -695,8 +710,10 @@ func (s *Store) replaceTaskTags(
 		}
 		if _, err := tx.Exec(
 			ctx,
-			`INSERT INTO task_tags(user_id, task_id, tag_id) VALUES($1,$2,$3)`,
+			`INSERT INTO task_tags(user_id, workspace_id, task_id, tag_id) VALUES($1,$2,$3,$4)
+			 ON CONFLICT (workspace_id, task_id, tag_id) DO NOTHING`,
 			userID,
+			workspaceID,
 			taskID,
 			tagID,
 		); err != nil {
@@ -709,22 +726,22 @@ func (s *Store) replaceTaskTags(
 func (s *Store) taskJSON(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID, taskID uuid.UUID,
+	workspaceID, taskID uuid.UUID,
 ) (json.RawMessage, error) {
 	var entity []byte
 	err := tx.QueryRow(
 		ctx,
 		`SELECT (
-		   to_jsonb(task_row) - 'user_id' - 'field_versions'
+			to_jsonb(task_row) - 'user_id' - 'workspace_id' - 'field_versions'
 		 ) || jsonb_build_object(
 		   'tag_ids', COALESCE((
 		     SELECT jsonb_agg(tag_id ORDER BY tag_id)
-		     FROM task_tags WHERE user_id=$1 AND task_id=$2
+			 FROM task_tags WHERE workspace_id=$1 AND task_id=$2
 		   ), '[]'::jsonb)
 		 )
 		 FROM tasks task_row
-		 WHERE user_id=$1 AND id=$2`,
-		userID,
+		 WHERE workspace_id=$1 AND id=$2`,
+		workspaceID,
 		taskID,
 	).Scan(&entity)
 	return entity, err
@@ -734,6 +751,7 @@ func recordChange(
 	ctx context.Context,
 	tx pgx.Tx,
 	userID uuid.UUID,
+	workspaceID uuid.UUID,
 	entityType string,
 	entityID uuid.UUID,
 	version int64,
@@ -744,10 +762,11 @@ func recordChange(
 	err := tx.QueryRow(
 		ctx,
 		`INSERT INTO sync_changes(
-		   user_id, entity_type, entity_id, entity_version, deleted, entity
-		 ) VALUES($1,$2,$3,$4,$5,$6)
+		   user_id, workspace_id, entity_type, entity_id, entity_version, deleted, entity
+		 ) VALUES($1,$2,$3,$4,$5,$6,$7)
 		 RETURNING cursor`,
 		userID,
+		workspaceID,
 		entityType,
 		entityID,
 		version,

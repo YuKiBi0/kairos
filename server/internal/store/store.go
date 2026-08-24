@@ -99,6 +99,14 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (
 	return user, nil
 }
 
+func (s *Store) personalWorkspaceID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+	var workspaceID uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM workspaces
+		WHERE kind = 'personal' AND owner_user_id = $1`, userID).Scan(&workspaceID)
+	return workspaceID, err
+}
+
 func (s *Store) UserByUsername(ctx context.Context, username string) (User, error) {
 	var user User
 	err := s.pool.QueryRow(

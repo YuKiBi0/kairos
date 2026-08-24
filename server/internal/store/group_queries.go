@@ -617,6 +617,12 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 	return workspaces, rows.Err()
 }
 
+func (s *Store) WorkspaceCursor(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
+	var cursor int64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE workspace_id = $1`, workspaceID).Scan(&cursor)
+	return cursor, err
+}
+
 func (s *Store) WriteAuditEvent(ctx context.Context, actorUserID, groupID *uuid.UUID, action, targetType string, targetID *uuid.UUID, outcome, requestID string, details []byte) error {
 	if strings.TrimSpace(action) == "" || strings.TrimSpace(targetType) == "" {
 		return errors.New("audit action and target type are required")
