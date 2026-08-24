@@ -45,8 +45,12 @@ func TestGroupAPIEnforcesMembershipAndRoleScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	invitee, err := database.CreateUser(ctx, "group-api-invitee-"+uuid.NewString(), hash)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var groupID uuid.UUID
-	t.Cleanup(func() { cleanupGroupAPI(databaseURL, groupID, []uuid.UUID{owner.ID, member.ID}) })
+	t.Cleanup(func() { cleanupGroupAPI(databaseURL, groupID, []uuid.UUID{owner.ID, member.ID, invitee.ID}) })
 
 	secret := []byte("01234567890123456789012345678901")
 	tokens := auth.NewTokenManager(secret, 15*time.Minute, "kairos-server")
@@ -58,7 +62,11 @@ func TestGroupAPIEnforcesMembershipAndRoleScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := New(database, config.Config{SessionSecret: secret, AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour}, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
+	inviteeToken, _, err := tokens.IssueAccess(invitee.ID, uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewWithRedis(database, config.Config{SessionSecret: secret, AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour}, slog.New(slog.NewTextHandler(io.Discard, nil)), "test", &inviteRedisFake{})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -71,6 +79,26 @@ func TestGroupAPIEnforcesMembershipAndRoleScope(t *testing.T) {
 	workspaces := requestJSON(t, http.MethodGet, server.URL+"/api/v2/workspaces", ownerToken, nil)
 	if values, ok := workspaces["workspaces"].([]any); !ok || len(values) != 2 {
 		t.Fatalf("unexpected owner workspaces: %#v", workspaces)
+	}
+	createdInvite := requestJSON(t, http.MethodPost, server.URL+"/api/v2/groups/"+groupID.String()+"/invites", ownerToken, map[string]any{
+		"max_uses":   1,
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	})
+	inviteCode, ok := createdInvite["code"].(string)
+	if !ok || inviteCode == "" {
+		t.Fatalf("invite creation did not return its one-time code: %#v", createdInvite)
+	}
+	redeemed := requestJSON(t, http.MethodPost, server.URL+"/api/v2/group-invites/redeem", inviteeToken, map[string]string{
+		"code":            inviteCode,
+		"idempotency_key": uuid.NewString(),
+	})
+	redemption, ok := redeemed["redemption"].(map[string]any)
+	if !ok || redemption["group_id"] != groupID.String() {
+		t.Fatalf("invite redemption did not return the joined group: %#v", redeemed)
+	}
+	inviteeWorkspaces := requestJSON(t, http.MethodGet, server.URL+"/api/v2/workspaces", inviteeToken, nil)
+	if values, ok := inviteeWorkspaces["workspaces"].([]any); !ok || len(values) != 2 {
+		t.Fatalf("unexpected invitee workspaces after redemption: %#v", inviteeWorkspaces)
 	}
 
 	status, _ := requestAPI(t, http.MethodGet, server.URL+"/api/v2/groups/"+groupID.String(), memberToken, nil)

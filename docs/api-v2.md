@@ -36,6 +36,7 @@
 - DELETE /groups/{group_id}/invites/{id} 撤销邀请码。
 - POST /group-invites/redeem 由当前真实账号兑换邀请码。
 - 兑换请求必须携带 UUID `idempotency_key`；同一成功兑换重复提交返回原结果，不重复计数。
+- 兑换按真实账号限制为每 60 秒最多 10 次尝试；超限返回 `429 RATE_LIMITED`，Redis 不可用时失败关闭并返回 `503 DEPENDENCY_UNAVAILABLE`。
 - expires_at 必须晚于当前时间且不超过创建后 30 天。
 - max_uses 为空表示有效期内无限次，否则必须大于零。
 - 指定 target_group_account_id 时 max_uses 强制为 1，目标必须未绑定。

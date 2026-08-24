@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/theme/organic_theme.dart';
@@ -198,6 +199,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ],
                   ),
           ),
+          if (auth.phase == AuthPhase.authenticated && auth.session != null)
+            const _GroupMembershipSection(),
           conflicts.when(
             data: (items) => items.isEmpty
                 ? const SizedBox.shrink()
@@ -327,6 +330,245 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           context,
         ).showSnackBar(SnackBar(content: Text('数据未导出：$error')));
       }
+    }
+  }
+}
+
+class _GroupMembershipSection extends ConsumerStatefulWidget {
+  const _GroupMembershipSection();
+
+  @override
+  ConsumerState<_GroupMembershipSection> createState() =>
+      _GroupMembershipSectionState();
+}
+
+class _GroupMembershipSectionState
+    extends ConsumerState<_GroupMembershipSection> {
+  final _groupNameController = TextEditingController();
+  final _inviteController = TextEditingController();
+  String? _inviteAttemptCode;
+  String? _inviteAttemptKey;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _groupNameController.dispose();
+    _inviteController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final workspaces = ref.watch(remoteWorkspacesProvider);
+    final selected = ref.watch(workspaceControllerProvider).workspaceId;
+    return _SettingsSection(
+      title: '群组',
+      description: '一个账号可以加入多个群组；邀请码由群组管理员提供。',
+      trailing: IconButton(
+        tooltip: '刷新群组',
+        onPressed: _submitting
+            ? null
+            : () => ref.invalidate(remoteWorkspacesProvider),
+        icon: const Icon(Icons.refresh),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          workspaces.when(
+            data: (values) => values.isEmpty
+                ? const Text('尚未读取到工作空间')
+                : Column(
+                    children: <Widget>[
+                      for (final workspace in values)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            workspace.isPersonal
+                                ? Icons.person_outline
+                                : Icons.groups_outlined,
+                          ),
+                          title: Text(workspace.displayName),
+                          subtitle: Text(
+                            workspace.isPersonal
+                                ? '个人任务'
+                                : '群组角色 ${workspace.role}',
+                          ),
+                          trailing: workspace.id == selected
+                              ? const Icon(
+                                  Icons.check_circle,
+                                  color: KairosColors.moss,
+                                )
+                              : TextButton(
+                                  onPressed: () => ref
+                                      .read(
+                                        workspaceControllerProvider.notifier,
+                                      )
+                                      .setWorkspace(workspace.id),
+                                  child: const Text('切换'),
+                                ),
+                        ),
+                    ],
+                  ),
+            error: (error, _) => Text('无法读取群组：$error'),
+            loading: () => const LinearProgressIndicator(),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _inviteController,
+            enabled: !_submitting,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(
+              labelText: '邀请码',
+              prefixIcon: Icon(Icons.key_outlined),
+            ),
+            onSubmitted: (_) => _redeemInvite(),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              onPressed: _submitting ? null : _redeemInvite,
+              icon: const Icon(Icons.group_add_outlined),
+              label: const Text('加入群组'),
+            ),
+          ),
+          const SizedBox(height: 18),
+          TextField(
+            controller: _groupNameController,
+            enabled: !_submitting,
+            maxLength: 100,
+            decoration: const InputDecoration(
+              labelText: '新群组名称',
+              prefixIcon: Icon(Icons.add_business_outlined),
+            ),
+            onSubmitted: (_) => _createGroup(),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _submitting ? null : _createGroup,
+              icon: const Icon(Icons.add),
+              label: const Text('创建群组'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<({Uri endpoint, String token})?> _apiContext() async {
+    final endpointRaw = await ref
+        .read(settingsRepositoryProvider)
+        .readServiceEndpoint();
+    final token = await ref.read(authControllerProvider.notifier).accessToken();
+    if (endpointRaw == null || token == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('同步服务登录已失效')));
+      }
+      return null;
+    }
+    return (endpoint: Uri.parse(endpointRaw), token: token);
+  }
+
+  Future<void> _redeemInvite() async {
+    final code = _inviteController.text.trim();
+    if (code.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请输入邀请码')));
+      return;
+    }
+    await _submit(() async {
+      final apiContext = await _apiContext();
+      if (apiContext == null) {
+        return;
+      }
+      if (_inviteAttemptCode != code || _inviteAttemptKey == null) {
+        _inviteAttemptCode = code;
+        _inviteAttemptKey = const Uuid().v4();
+      }
+      final groupId = await ref
+          .read(kairosApiProvider)
+          .redeemGroupInvite(
+            endpoint: apiContext.endpoint,
+            accessToken: apiContext.token,
+            code: code,
+            idempotencyKey: _inviteAttemptKey!,
+          );
+      _inviteController.clear();
+      _inviteAttemptCode = null;
+      _inviteAttemptKey = null;
+      await _refreshAndSelect(groupId: groupId);
+      _notify('已加入群组');
+    });
+  }
+
+  Future<void> _createGroup() async {
+    final name = _groupNameController.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请输入群组名称')));
+      return;
+    }
+    await _submit(() async {
+      final apiContext = await _apiContext();
+      if (apiContext == null) {
+        return;
+      }
+      final workspaceId = await ref
+          .read(kairosApiProvider)
+          .createGroup(
+            endpoint: apiContext.endpoint,
+            accessToken: apiContext.token,
+            name: name,
+          );
+      _groupNameController.clear();
+      await _refreshAndSelect(workspaceId: workspaceId);
+      _notify('群组已创建');
+    });
+  }
+
+  Future<void> _refreshAndSelect({String? workspaceId, String? groupId}) async {
+    ref.invalidate(remoteWorkspacesProvider);
+    final values = await ref.read(remoteWorkspacesProvider.future);
+    final target = values.where(
+      (workspace) =>
+          workspace.id == workspaceId || workspace.groupId == groupId,
+    );
+    if (target.isEmpty) {
+      throw StateError('群组已更新，但工作空间目录尚未返回该群组');
+    }
+    ref
+        .read(workspaceControllerProvider.notifier)
+        .setWorkspace(target.first.id);
+  }
+
+  Future<void> _submit(Future<void> Function() action) async {
+    setState(() => _submitting = true);
+    try {
+      await action();
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('群组操作失败：$error')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
+    }
+  }
+
+  void _notify(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 }

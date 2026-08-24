@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
+
+const (
+	inviteRedeemLimit       = int64(10)
+	inviteRedeemWindow      = 60 * time.Second
+	inviteRedeemRateKeyBase = "kairos:invite:redeem:"
+)
+
+const inviteRedeemRateScript = `local current = redis.call('INCR', KEYS[1]); if current == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]); end; return current`
 
 type createInviteRequest struct {
 	TargetGroupAccountID string `json:"target_group_account_id,omitempty"`
@@ -116,11 +125,39 @@ func (a *API) redeemInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "邀请码无效")
 		return
 	}
+	allowed, err := a.allowInviteRedemption(r, userID)
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "邀请码兑换服务暂时不可用")
+		return
+	}
+	if !allowed {
+		writeError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "邀请码兑换尝试过于频繁")
+		return
+	}
 	redemption, err := a.store.RedeemGroupInvite(r.Context(), userID, invites.Digest(a.inviteSecret, code), key)
 	if handleInviteError(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"redemption": redemption})
+}
+
+func (a *API) allowInviteRedemption(r *http.Request, userID uuid.UUID) (bool, error) {
+	value, err := a.redisCommand(
+		r,
+		"EVAL",
+		inviteRedeemRateScript,
+		"1",
+		inviteRedeemRateKeyBase+userID.String(),
+		fmt.Sprintf("%.0f", inviteRedeemWindow.Seconds()),
+	)
+	if err != nil {
+		return false, err
+	}
+	count, ok := value.(int64)
+	if !ok || count < 1 {
+		return false, fmt.Errorf("unexpected invite rate limit response %T", value)
+	}
+	return count <= inviteRedeemLimit, nil
 }
 
 func inviteParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {

@@ -100,6 +100,60 @@ class KairosApi {
         .toList(growable: false);
   }
 
+  Future<String> createGroup({
+    required Uri endpoint,
+    required String accessToken,
+    required String name,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'POST',
+      path: '/api/v2/groups',
+      accessToken: accessToken,
+      data: <String, Object?>{'name': name.trim()},
+    );
+    final group = json['group'];
+    if (group is! Map<String, dynamic> ||
+        group['workspace_id'] is! String) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid group response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return group['workspace_id'] as String;
+  }
+
+  Future<String> redeemGroupInvite({
+    required Uri endpoint,
+    required String accessToken,
+    required String code,
+    required String idempotencyKey,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'POST',
+      path: '/api/v2/group-invites/redeem',
+      accessToken: accessToken,
+      data: <String, Object?>{
+        'code': code.trim(),
+        'idempotency_key': idempotencyKey,
+      },
+    );
+    final redemption = json['redemption'];
+    if (redemption is! Map<String, dynamic> ||
+        redemption['group_id'] is! String) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid invite redemption response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return redemption['group_id'] as String;
+  }
+
   Future<Map<String, dynamic>> snapshot({
     required Uri endpoint,
     required String accessToken,
