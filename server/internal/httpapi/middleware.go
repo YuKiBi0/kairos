@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YuKiBi0/kairos/server/internal/store"
 	"github.com/google/uuid"
 )
 
@@ -55,6 +56,7 @@ func requestMetadata(logger *slog.Logger, next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", id)
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
+		ctx = store.WithAuditRequestID(ctx, id)
 		started := time.Now()
 		writer := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(writer, r.WithContext(ctx))
@@ -102,6 +104,10 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 		userID, deviceID, err := a.tokens.ParseAccess(strings.TrimSpace(header[7:]))
 		if err != nil {
 			writeError(w, r, http.StatusUnauthorized, "AUTH_EXPIRED", "请重新登录同步服务")
+			return
+		}
+		if _, err := a.store.UserByID(r.Context(), userID); err != nil {
+			writeError(w, r, http.StatusUnauthorized, "ACCOUNT_DISABLED", "账号不可用")
 			return
 		}
 		ctx := context.WithValue(r.Context(), userIDKey, userID)

@@ -19,7 +19,11 @@ func (s *Store) TaskEntity(
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	entity, err := s.taskJSON(ctx, tx, userID, taskID)
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	entity, err := s.taskJSON(ctx, tx, workspaceID, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -37,29 +41,33 @@ func (s *Store) TaskDescendants(
 	if depthLimit < 1 || depthLimit > 5 {
 		return nil, errors.New("depth limit must be between 1 and 5")
 	}
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(
 		ctx,
 		`WITH RECURSIVE descendants AS (
 		   SELECT child.*, 1 AS relative_depth
 		   FROM tasks child
-		   WHERE child.user_id=$1 AND child.parent_id=$2 AND child.deleted_at IS NULL
+		   WHERE child.workspace_id=$1 AND child.parent_id=$2 AND child.deleted_at IS NULL
 		   UNION ALL
 		   SELECT child.*, parent.relative_depth+1
 		   FROM tasks child
 		   JOIN descendants parent ON child.parent_id=parent.id
-		   WHERE child.user_id=$1 AND child.deleted_at IS NULL
+		   WHERE child.workspace_id=$1 AND child.deleted_at IS NULL
 		     AND parent.relative_depth < $3
 		 )
-		 SELECT (to_jsonb(descendants) - 'user_id' - 'field_versions' - 'relative_depth') ||
+		 SELECT (to_jsonb(descendants) - 'user_id' - 'workspace_id' - 'field_versions' - 'relative_depth') ||
 		 jsonb_build_object(
 		   'tag_ids', COALESCE((
 		     SELECT jsonb_agg(tag_id ORDER BY tag_id)
-		     FROM task_tags WHERE user_id=$1 AND task_id=descendants.id
+		     FROM task_tags WHERE workspace_id=$1 AND task_id=descendants.id
 		   ), '[]'::jsonb)
 		 )
 		 FROM descendants
 		 ORDER BY depth, parent_id, sort_order, id`,
-		userID,
+		workspaceID,
 		taskID,
 		depthLimit,
 	)
@@ -83,6 +91,10 @@ func (s *Store) TaxonomyEntities(
 	userID uuid.UUID,
 	entityType string,
 ) ([]json.RawMessage, error) {
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	table := ""
 	switch entityType {
 	case "tag":
@@ -95,11 +107,11 @@ func (s *Store) TaxonomyEntities(
 		return nil, errors.New("unsupported taxonomy entity")
 	}
 	query := fmt.Sprintf(
-		`SELECT to_jsonb(entity_row) - 'user_id' - 'field_versions'
-		 FROM %s entity_row WHERE user_id=$1 ORDER BY name,id`,
+		`SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
+		 FROM %s entity_row WHERE workspace_id=$1 ORDER BY name,id`,
 		table,
 	)
-	rows, err := s.pool.Query(ctx, query, userID)
+	rows, err := s.pool.Query(ctx, query, workspaceID)
 	if err != nil {
 		return nil, err
 	}

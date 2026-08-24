@@ -13,11 +13,13 @@ class ExportResult {
     required this.filePath,
     required this.taskCount,
     required this.blockerCount,
+    this.pendingOperationCount = 0,
   });
 
   final String filePath;
   final int taskCount;
   final int blockerCount;
+  final int pendingOperationCount;
 }
 
 class JsonExportService {
@@ -33,18 +35,26 @@ class JsonExportService {
   final ExportDirectoryProvider _directoryProvider;
   final DateTime Function() _now;
 
-  Future<ExportResult> export() async {
+  Future<ExportResult> export() => _export(includeOutbox: false);
+
+  Future<ExportResult> exportRecovery() => _export(includeOutbox: true);
+
+  Future<ExportResult> _export({required bool includeOutbox}) async {
     final tasks = await _database.select(_database.localTasks).get();
     final blockers = await _database.select(_database.localBlockers).get();
     final tags = await _database.select(_database.localTags).get();
     final projects = await _database.select(_database.localProjects).get();
     final groups = await _database.select(_database.localChecklistGroups).get();
     final taskTags = await _database.select(_database.taskTags).get();
+    final outbox = includeOutbox
+        ? await _database.select(_database.outboxOperations).get()
+        : const <OutboxOperation>[];
     final exportedAt = _now().toUtc();
     final document = <String, Object?>{
       'format': 'kairos-export',
       'schema_version': 1,
       'exported_at': exportedAt.toIso8601String(),
+      if (includeOutbox) 'recovery_mode': true,
       'tasks': <Map<String, Object?>>[
         for (final task in tasks)
           <String, Object?>{
@@ -117,6 +127,21 @@ class JsonExportService {
             'updated_at': _time(group.updatedAtUtc),
           },
       ],
+      if (includeOutbox)
+        'outbox_operations': <Map<String, Object?>>[
+          for (final operation in outbox)
+            <String, Object?>{
+              'operation_id': operation.operationId,
+              'entity_type': operation.entityType,
+              'entity_id': operation.entityId,
+              'base_version': operation.baseVersion,
+              'payload': _decodePayload(operation.payload),
+              'created_at': _time(operation.createdAtUtc),
+              'attempt_count': operation.attemptCount,
+              'next_attempt_at': _time(operation.nextAttemptAtUtc),
+              'last_error': operation.lastError,
+            },
+        ],
     };
     final directory = await _directoryProvider();
     await directory.create(recursive: true);
@@ -124,7 +149,8 @@ class JsonExportService {
         .toIso8601String()
         .replaceAll(RegExp(r'[^0-9]'), '')
         .substring(0, 14);
-    final file = File(path.join(directory.path, 'kairos-export-$stamp.json'));
+    final prefix = includeOutbox ? 'kairos-recovery' : 'kairos-export';
+    final file = File(path.join(directory.path, '$prefix-$stamp.json'));
     await file.writeAsString(
       const JsonEncoder.withIndent('  ').convert(document),
       flush: true,
@@ -133,10 +159,19 @@ class JsonExportService {
       filePath: file.path,
       taskCount: tasks.length,
       blockerCount: blockers.length,
+      pendingOperationCount: outbox.length,
     );
   }
 
   String? _time(DateTime? value) => value?.toUtc().toIso8601String();
+
+  Object? _decodePayload(String value) {
+    try {
+      return jsonDecode(value);
+    } on Object {
+      return value;
+    }
+  }
 }
 
 Future<Directory> _defaultExportDirectory() async {

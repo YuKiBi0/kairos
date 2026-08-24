@@ -73,7 +73,12 @@ func (s *Store) APIVersion(ctx context.Context) (string, error) {
 
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (User, error) {
 	user := User{ID: uuid.New(), Username: username, PasswordHash: passwordHash}
-	err := s.pool.QueryRow(
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	err = tx.QueryRow(
 		ctx,
 		`INSERT INTO users(id, username, password_hash)
 		 VALUES($1, $2, $3)
@@ -85,7 +90,21 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (
 	if err != nil {
 		return User{}, fmt.Errorf("create user: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO workspaces(id, kind, owner_user_id) VALUES($1, 'personal', $2)`, uuid.New(), user.ID); err != nil {
+		return User{}, fmt.Errorf("create personal workspace: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, fmt.Errorf("commit user creation: %w", err)
+	}
 	return user, nil
+}
+
+func (s *Store) personalWorkspaceID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+	var workspaceID uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM workspaces
+		WHERE kind = 'personal' AND owner_user_id = $1`, userID).Scan(&workspaceID)
+	return workspaceID, err
 }
 
 func (s *Store) UserByUsername(ctx context.Context, username string) (User, error) {
@@ -93,7 +112,7 @@ func (s *Store) UserByUsername(ctx context.Context, username string) (User, erro
 	err := s.pool.QueryRow(
 		ctx,
 		`SELECT id, username, password_hash, created_at
-		 FROM users WHERE username = $1`,
+		 FROM users WHERE username = $1 AND disabled_at IS NULL`,
 		username,
 	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.CreatedAt)
 	if err != nil {
@@ -107,13 +126,19 @@ func (s *Store) UserByID(ctx context.Context, userID uuid.UUID) (User, error) {
 	err := s.pool.QueryRow(
 		ctx,
 		`SELECT id, username, password_hash, created_at
-		 FROM users WHERE id = $1`,
+		 FROM users WHERE id = $1 AND disabled_at IS NULL`,
 		userID,
 	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.CreatedAt)
 	if err != nil {
 		return User{}, err
 	}
 	return user, nil
+}
+
+func (s *Store) UserIDByExactUsername(ctx context.Context, username string) (uuid.UUID, error) {
+	var userID uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM users WHERE username = $1 AND disabled_at IS NULL`, username).Scan(&userID)
+	return userID, err
 }
 
 func (s *Store) DeviceByID(

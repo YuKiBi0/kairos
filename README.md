@@ -1,81 +1,101 @@
 # Kairos
 
-> 凡事都有定期。
+Kairos 是一个离线优先的任务管理系统，提供 Windows/Android 客户端、可自部署的 Go 服务端，以及轻量的 `KairosAdmin` 管理后台。
 
-**Kairos** 源自古希腊语。与表示连续、可计量的物理时间 **Chronos** 不同，Kairos 指向的是“恰当的关键时机”：在对的时候，做对的事。
+当前仓库对应 **MVP 2.0**：一个真实账号可以拥有个人工作空间并加入多个群组；群组通过花名册、邀请码和 L1/L2/L3 角色管理成员；任务和同步数据按工作空间隔离；Redis 用于限流和 KairosAdmin 会话，PostgreSQL 保存权威业务数据。
 
-Kairos 是一款面向 Windows 和 Android 的离线优先个人任务管理应用。它把任务的轻重缓急、行动层级和推进障碍放在同一个工作空间中，帮助你从“记住所有事情”转向“看清此刻最值得做的事情”。
+## 主要能力
 
-## 应用理念
+- 任务列表、任务树、四象限、标签、项目、清单和困难点。
+- 本地 Drift/SQLite 持久化，outbox 记录离线写入，网络恢复后增量同步。
+- 个人工作空间与多个群组工作空间快速切换，游标、冲突和待上传队列按空间隔离。
+- 群组花名册：群组账号不能登录，可以先建立名册再绑定真实账号；绑定关系保留历史。
+- 邀请码：普通邀请码支持有效期内不限次数或次数上限；指定花名册账号时强制单次使用；有效期最长 30 天。
+- RBAC：独立成员/群组成员 L1、群组管理员 L2、超级管理员 L3。角色不能越级，保护最后一个 L3 和群组最后一个 L2。
+- 群组协作默认关闭。开启后不可关闭，任务必须显式共享，不会自动公开历史任务。
+- `KairosAdmin` 原生 HTML/CSS/JavaScript 管理后台，入口固定为大小写敏感的 `/KairosAdmin/`。
+- Redis 不可用时，个人任务同步尽量继续；登录、邀请码、管理后台和角色变更等敏感操作失败关闭。
 
-时间管理不只是把事项塞进日历，也是在有限的注意力中做出选择。Kairos 围绕三个问题组织任务：
+## 架构概览
 
-- **现在重要的是什么？** 用四象限区分重要性与紧迫性。
-- **下一步具体做什么？** 用任务树把目标拆成可以执行的小步骤。
-- **是什么阻碍了推进？** 单独记录困难点，让停滞的原因保持可见。
+```text
+Flutter (Windows / Android)
+        |
+        | HTTPS / WSS, /api/v1 + /api/v2
+        v
+Go HTTP/WebSocket server ---- Redis (限流、KairosAdmin 会话)
+        |
+        +---- PostgreSQL (账号、群组、花名册、任务、同步、审计权威数据)
+        |
+        +---- KairosAdmin (embed.FS 原生管理页面)
+```
 
-所有操作都会先保存在本机。即使没有网络，你仍然可以记录、整理和完成任务；需要跨设备使用时，再连接自己部署的同步服务。
+客户端仍以本地数据库为首写入点。服务端每次请求重新校验真实账号、工作空间和群组角色，不信任客户端提交的 `user_id`、`workspace_id` 或角色字段。
 
-## 功能介绍
+## 快速开始
 
-### 用三种视图看同一组任务
+### 1. 启动 PostgreSQL 和 Redis
 
-- **列表视图**适合快速浏览和处理日常事项。
-- **任务树视图**展示父子关系，支持最多五层拆解、同级排序和任务移动，并汇总子任务完成进度。
-- **四象限视图**按照“重要 / 紧急”两个维度分布任务，帮助判断行动优先级。
+仓库提供本地 Compose 文件：
 
-三种视图共享同一份任务数据，可以随时切换，不需要重复维护。
+```powershell
+docker compose -f deploy/docker-compose.postgres.yml up -d
+```
 
-### 记录任务所需的上下文
+### 2. 准备服务端环境文件
 
-每个任务可以设置标题、描述、截止时间和状态，并归入四象限。你还可以通过以下方式补充上下文：
+复制 `server/.env.example` 到仓库外的受限目录，至少设置数据库 URL、长度不少于 32 个字符的 `KAIROS_SESSION_SECRET`，以及引导账号密码。开发环境可保留 `KAIROS_REDIS_REQUIRED=false`。
 
-- 使用**标签**标记主题或场景；
-- 使用**项目**聚合围绕同一目标的任务；
-- 使用**清单分组**整理具有相同步骤或用途的事项；
-- 使用**推进困难点**记录阻塞原因，并在解决后保留处理状态。
+### 3. 迁移、创建账号并启动
 
-### 搜索、筛选与聚焦
+```powershell
+cd server
+go run .\cmd\kairos-server --env-file D:\secure\kairos.env migrate
+go run .\cmd\kairos-server --env-file D:\secure\kairos.env create-user
+go run .\cmd\kairos-server --env-file D:\secure\kairos.env bootstrap-super-admin owner
+go run .\cmd\kairos-server --env-file D:\secure\kairos.env serve
+```
 
-Kairos 支持按标题和描述搜索，并可结合任务范围、状态、象限、截止时间、困难点、标签、项目和清单分组进行筛选。无论当前使用列表、任务树还是四象限视图，都能沿用相同的筛选条件。
+启动后检查：
 
-### 在任务变化时持续整理
+```text
+GET http://127.0.0.1:8080/healthz
+GET http://127.0.0.1:8080/readyz
+GET http://127.0.0.1:8080/version
+```
 
-- 快速完成或重新打开任务；
-- 调整父子关系和同级顺序；
-- 查看任务路径、子任务进度和未解决的困难点；
-- 删除后即时撤销，避免误操作；
-- 将本地数据导出为 JSON，便于个人留存。
+`bootstrap-super-admin` 只在数据库还没有 L3 时生效。完成后应从环境文件删除 `KAIROS_BOOTSTRAP_PASSWORD`。
 
-### 离线优先与跨设备同步
+### 4. 启动客户端
 
-任务始终先写入本地数据库，断网不会中断日常使用。配置自部署服务后，Windows 和 Android 设备可以在网络恢复时继续同步。
+```powershell
+flutter pub get
+flutter run -d windows
+```
 
-当同一字段在不同设备上被分别修改时，Kairos 会显示冲突并让你选择保留本地内容或采用服务端内容，不会静默覆盖。链路健康页面还会展示连接状态、最近同步结果、待上传操作和脱敏诊断信息，方便确认数据是否已经同步。
-
-### 针对不同设备优化
-
-- **Windows**：适配宽屏工作空间，提供自定义标题栏、窗口置顶和紧凑模式。
-- **Android**：适配窄屏操作，支持下拉同步，便于随时记录和查看任务。
-
-## 适合谁使用
-
-Kairos 适合希望在手机上随手记录、在电脑上集中整理，并愿意自行掌控服务端与数据的个人用户。当前版本以个人单用户场景为核心，不提供团队协作或公共云服务；完整范围请查看[已知限制](docs/known-limitations.md)。
+客户端服务地址在设置中配置。公网部署必须使用 HTTPS/WSS；局域网明文 HTTP/WS 只适合开发和明确确认过风险的环境。
 
 ## 工程文档
 
-构建、部署、接口和维护等工程化内容统一放在 `docs/` 目录：
-
+- [架构与数据模型](docs/architecture.md)
+- [部署与运维](docs/deployment.md)
 - [客户端构建](docs/build.md)
-- [服务端部署与运维](docs/deployment.md)
+- [测试与质量门禁](docs/testing.md)
 - [API v1](docs/api.md)
+- [API v2：群组、工作空间与 KairosAdmin](docs/api-v2.md)
 - [API 变更记录](docs/api-changelog.md)
-- [MVP 已知限制](docs/known-limitations.md)
-
-## MVP 2.0
-
-多账号、群组花名册、邀请码、分级 RBAC、多工作空间同步、协作和 KairosAdmin 正在按 [MVP 2.0 规格](docs/mvp-2.0-spec.md) 和 [实施计划](docs/mvp-2.0-plan.md) 开发。
-
 - [MVP 2.0 产品与技术基线](docs/mvp-2.0-spec.md)
-- [API v2（开发中）](docs/api-v2.md)
-- [MVP 2.0 实施计划](docs/mvp-2.0-plan.md)
+- [MVP 2.0 实施与发布计划](docs/mvp-2.0-plan.md)
+- [当前限制与明确不支持的范围](docs/known-limitations.md)
+
+## 版本与分支
+
+MVP2 的最终提交链在 `codex/feature-mvp2-client-workspaces`，提交到 `develop` 时建议使用一个总 PR。`codex/feature-mvp2-foundation`、`codex/feature-mvp2-sync-v2` 和 `codex/feature-mvp2-admin` 是本地阶段性分支，不是当前远端必需分支。
+
+## 安全底线
+
+不要提交 `.env`、密码、令牌、原始邀请码、私钥或生产数据库备份。管理 Cookie 使用 HttpOnly/Secure/SameSite 属性，写请求需要 CSRF token。日志和错误响应不得包含密码、令牌、原始邀请码或任务正文。
+
+## 许可证
+
+见 [LICENSE](LICENSE)。

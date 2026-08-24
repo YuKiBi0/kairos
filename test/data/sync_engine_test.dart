@@ -87,6 +87,52 @@ void main() {
     expect(outcome.pushed, 1);
   });
 
+  test('moves pending operations to a read-only recovery state after revocation', () async {
+    await _markSnapshotCompleted(database);
+    final repository = LocalTaskRepository(
+      database,
+      entityIdGenerator: () => 'revoked-task',
+      operationIdGenerator: () => 'revoked-operation',
+    );
+    await repository.createTask(title: 'Local draft', deviceId: 'device-a');
+    api.forbiddenScope = true;
+    final groupEngine = SyncEngine(
+      database: database,
+      api: api,
+      auth: const _FakeAccessTokenProvider(),
+      settings: _FakeSettingsRepository(),
+      workspaceId: 'group-workspace',
+    );
+
+    await expectLater(
+      groupEngine.synchronize(),
+      throwsA(isA<WorkspaceAccessRevokedException>()),
+    );
+
+    final preference = await (database.select(database.localPreferences)
+          ..where((table) => table.key.equals('workspace_access_revoked')))
+        .getSingle();
+    final operation = await database.select(database.outboxOperations).getSingle();
+    expect(preference.value, 'true');
+    expect(operation.lastError, 'FORBIDDEN_SCOPE');
+    expect(operation.nextAttemptAtUtc.isAfter(DateTime.now().toUtc()), isTrue);
+
+    api.forbiddenScope = false;
+    await expectLater(
+      groupEngine.synchronize(),
+      completes,
+    );
+    expect(api.workspaceDetailCalls, 1);
+    expect(api.syncStatusCalls, 3);
+    final recoveredOperation =
+        await database.select(database.outboxOperations).getSingle();
+    expect(recoveredOperation.lastError, equals(null));
+    expect(
+      recoveredOperation.nextAttemptAtUtc.isBefore(DateTime.now().toUtc()),
+      isTrue,
+    );
+  });
+
   test('does not overwrite dirty task during snapshot', () async {
     final repository = LocalTaskRepository(
       database,
@@ -374,11 +420,38 @@ class _FakeApi extends KairosApi {
   final List<int> requestedAfter = <int>[];
   int serverCursor = 0;
   int snapshotCalls = 0;
+  int syncStatusCalls = 0;
+  int workspaceDetailCalls = 0;
+  bool forbiddenScope = false;
+
+  @override
+  Future<RemoteWorkspace> workspaceDetail({
+    required Uri endpoint,
+    required String accessToken,
+    required String workspaceId,
+  }) async {
+    workspaceDetailCalls++;
+    if (forbiddenScope) {
+      throw const ApiFailure(
+        code: 'FORBIDDEN_SCOPE',
+        message: 'workspace access revoked',
+        statusCode: 403,
+        retryable: false,
+      );
+    }
+    return RemoteWorkspace(
+      id: workspaceId,
+      kind: 'group',
+      displayName: 'Recovered group',
+      role: 'L1',
+    );
+  }
 
   @override
   Future<Map<String, dynamic>> snapshot({
     required Uri endpoint,
     required String accessToken,
+    String workspaceId = 'personal',
   }) async {
     snapshotCalls++;
     final cursor = (snapshotResponse['cursor'] as num).toInt();
@@ -392,7 +465,17 @@ class _FakeApi extends KairosApi {
   Future<RemoteSyncStatus> syncStatus({
     required Uri endpoint,
     required String accessToken,
+    String workspaceId = 'personal',
   }) async {
+    syncStatusCalls++;
+    if (forbiddenScope) {
+      throw const ApiFailure(
+        code: 'FORBIDDEN_SCOPE',
+        message: 'workspace access revoked',
+        statusCode: 403,
+        retryable: false,
+      );
+    }
     for (final page in changesPages) {
       if (page.serverCursor > serverCursor) {
         serverCursor = page.serverCursor;
@@ -411,6 +494,7 @@ class _FakeApi extends KairosApi {
     required String accessToken,
     required int after,
     int limit = 200,
+    String workspaceId = 'personal',
   }) async {
     requestedAfter.add(after);
     if (changesPages.isEmpty) {
@@ -431,6 +515,7 @@ class _FakeApi extends KairosApi {
     required Uri endpoint,
     required String accessToken,
     required List<Map<String, Object?>> operations,
+    String workspaceId = 'personal',
   }) async {
     pushedOperations = operations;
     final pushedChanges = <RemoteChange>[];

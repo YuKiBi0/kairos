@@ -75,24 +75,132 @@ class KairosApi {
     );
   }
 
-  Future<Map<String, dynamic>> snapshot({
-    required Uri endpoint,
-    required String accessToken,
-  }) => _request(
-    endpoint: endpoint,
-    method: 'GET',
-    path: '/api/v1/sync/snapshot',
-    accessToken: accessToken,
-  );
-
-  Future<RemoteSyncStatus> syncStatus({
+  Future<List<RemoteWorkspace>> workspaces({
     required Uri endpoint,
     required String accessToken,
   }) async {
     final json = await _request(
       endpoint: endpoint,
       method: 'GET',
-      path: '/api/v1/sync/status',
+      path: '/api/v2/workspaces',
+      accessToken: accessToken,
+    );
+    final values = json['workspaces'];
+    if (values is! List<dynamic>) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid workspace response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return values
+        .cast<Map<String, dynamic>>()
+        .map(RemoteWorkspace.fromJson)
+        .toList(growable: false);
+  }
+
+  Future<RemoteWorkspace> workspaceDetail({
+    required Uri endpoint,
+    required String accessToken,
+    required String workspaceId,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'GET',
+      path: '/api/v2/workspaces/$workspaceId',
+      accessToken: accessToken,
+    );
+    final value = json['workspace'];
+    if (value is! Map<String, dynamic>) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid workspace response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return RemoteWorkspace.fromJson(value);
+  }
+
+  Future<String> createGroup({
+    required Uri endpoint,
+    required String accessToken,
+    required String name,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'POST',
+      path: '/api/v2/groups',
+      accessToken: accessToken,
+      data: <String, Object?>{'name': name.trim()},
+    );
+    final group = json['group'];
+    if (group is! Map<String, dynamic> ||
+        group['workspace_id'] is! String) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid group response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return group['workspace_id'] as String;
+  }
+
+  Future<String> redeemGroupInvite({
+    required Uri endpoint,
+    required String accessToken,
+    required String code,
+    required String idempotencyKey,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'POST',
+      path: '/api/v2/group-invites/redeem',
+      accessToken: accessToken,
+      data: <String, Object?>{
+        'code': code.trim(),
+        'idempotency_key': idempotencyKey,
+      },
+    );
+    final redemption = json['redemption'];
+    if (redemption is! Map<String, dynamic> ||
+        redemption['group_id'] is! String) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid invite redemption response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return redemption['group_id'] as String;
+  }
+
+  Future<Map<String, dynamic>> snapshot({
+    required Uri endpoint,
+    required String accessToken,
+    String workspaceId = 'personal',
+  }) => _request(
+    endpoint: endpoint,
+    method: 'GET',
+    path: workspaceId == 'personal'
+        ? '/api/v1/sync/snapshot'
+        : '/api/v2/workspaces/$workspaceId/sync/snapshot',
+    accessToken: accessToken,
+  );
+
+  Future<RemoteSyncStatus> syncStatus({
+    required Uri endpoint,
+    required String accessToken,
+    String workspaceId = 'personal',
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'GET',
+      path: workspaceId == 'personal'
+          ? '/api/v1/sync/status'
+          : '/api/v2/workspaces/$workspaceId/sync/status',
       accessToken: accessToken,
     );
     return RemoteSyncStatus.fromJson(json);
@@ -103,11 +211,14 @@ class KairosApi {
     required String accessToken,
     required int after,
     int limit = 200,
+    String workspaceId = 'personal',
   }) async {
     final json = await _request(
       endpoint: endpoint,
       method: 'GET',
-      path: '/api/v1/sync/changes',
+      path: workspaceId == 'personal'
+          ? '/api/v1/sync/changes'
+          : '/api/v2/workspaces/$workspaceId/sync/changes',
       accessToken: accessToken,
       query: <String, Object?>{'after': after, 'limit': limit},
     );
@@ -126,11 +237,14 @@ class KairosApi {
     required Uri endpoint,
     required String accessToken,
     required List<Map<String, Object?>> operations,
+    String workspaceId = 'personal',
   }) async {
     final json = await _request(
       endpoint: endpoint,
       method: 'POST',
-      path: '/api/v1/sync/push',
+      path: workspaceId == 'personal'
+          ? '/api/v1/sync/push'
+          : '/api/v2/workspaces/$workspaceId/sync/push',
       accessToken: accessToken,
       data: <String, Object?>{'operations': operations},
     );

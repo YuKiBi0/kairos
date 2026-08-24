@@ -10,19 +10,23 @@ import (
 )
 
 type Config struct {
-	Environment       string
-	HTTPAddr          string
-	DatabaseURL       string
-	BaseURL           string
-	SessionSecret     []byte
-	AccessTTL         time.Duration
-	RefreshTTL        time.Duration
-	LogLevel          string
-	CORSOrigins       []string
-	RealtimeOrigin    []string
-	MigrationsDir     string
-	BootstrapUsername string
-	BootstrapPassword string
+	Environment         string
+	HTTPAddr            string
+	DatabaseURL         string
+	RedisURL            string
+	RedisRequired       bool
+	RedisDialTimeout    time.Duration
+	RedisCommandTimeout time.Duration
+	BaseURL             string
+	SessionSecret       []byte
+	AccessTTL           time.Duration
+	RefreshTTL          time.Duration
+	LogLevel            string
+	CORSOrigins         []string
+	RealtimeOrigin      []string
+	MigrationsDir       string
+	BootstrapUsername   string
+	BootstrapPassword   string
 }
 
 func Load() (Config, error) {
@@ -43,20 +47,36 @@ func Load() (Config, error) {
 	if len(secret) < 32 {
 		return Config{}, errors.New("KAIROS_SESSION_SECRET must be at least 32 characters")
 	}
+	redisDialTimeout, err := duration("KAIROS_REDIS_DIAL_TIMEOUT", 500*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+	redisCommandTimeout, err := duration("KAIROS_REDIS_COMMAND_TIMEOUT", 500*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+	redisRequired, err := boolean("KAIROS_REDIS_REQUIRED", false)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		Environment:       value("KAIROS_ENV", "production"),
-		HTTPAddr:          value("KAIROS_HTTP_ADDR", "127.0.0.1:8080"),
-		DatabaseURL:       databaseURL,
-		BaseURL:           strings.TrimRight(value("KAIROS_BASE_URL", "http://127.0.0.1:8080"), "/"),
-		SessionSecret:     []byte(secret),
-		AccessTTL:         accessTTL,
-		RefreshTTL:        refreshTTL,
-		LogLevel:          value("KAIROS_LOG_LEVEL", "info"),
-		CORSOrigins:       csv(os.Getenv("KAIROS_CORS_ORIGINS")),
-		MigrationsDir:     value("KAIROS_MIGRATIONS_DIR", "migrations"),
-		BootstrapUsername: value("KAIROS_BOOTSTRAP_USERNAME", ""),
-		BootstrapPassword: os.Getenv("KAIROS_BOOTSTRAP_PASSWORD"),
+		Environment:         value("KAIROS_ENV", "production"),
+		HTTPAddr:            value("KAIROS_HTTP_ADDR", "127.0.0.1:8080"),
+		DatabaseURL:         databaseURL,
+		RedisURL:            value("KAIROS_REDIS_URL", "redis://127.0.0.1:6379/0"),
+		RedisRequired:       redisRequired,
+		RedisDialTimeout:    redisDialTimeout,
+		RedisCommandTimeout: redisCommandTimeout,
+		BaseURL:             strings.TrimRight(value("KAIROS_BASE_URL", "http://127.0.0.1:8080"), "/"),
+		SessionSecret:       []byte(secret),
+		AccessTTL:           accessTTL,
+		RefreshTTL:          refreshTTL,
+		LogLevel:            value("KAIROS_LOG_LEVEL", "info"),
+		CORSOrigins:         csv(os.Getenv("KAIROS_CORS_ORIGINS")),
+		MigrationsDir:       value("KAIROS_MIGRATIONS_DIR", "migrations"),
+		BootstrapUsername:   value("KAIROS_BOOTSTRAP_USERNAME", ""),
+		BootstrapPassword:   os.Getenv("KAIROS_BOOTSTRAP_PASSWORD"),
 	}, nil
 }
 
@@ -90,11 +110,14 @@ func csv(raw string) []string {
 	return result
 }
 
-func Bool(key string, fallback bool) bool {
+func boolean(key string, fallback bool) (bool, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.ParseBool(raw)
-	return err == nil && parsed
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", key, err)
+	}
+	return parsed, nil
 }
