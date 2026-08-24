@@ -27,6 +27,31 @@ ALTER TABLE tasks
 CREATE INDEX idx_tasks_workspace_group_account
     ON tasks(workspace_id, group_account_id, updated_at);
 
+CREATE OR REPLACE FUNCTION validate_task_group_account()
+RETURNS trigger AS $$
+DECLARE
+    workspace_kind text;
+    workspace_group_id uuid;
+    account_group_id uuid;
+BEGIN
+    SELECT kind, group_id INTO workspace_kind, workspace_group_id
+    FROM workspaces WHERE id = NEW.workspace_id;
+    IF NEW.group_account_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+    SELECT group_id INTO account_group_id
+    FROM group_accounts WHERE id = NEW.group_account_id;
+    IF workspace_kind <> 'group' OR workspace_group_id IS DISTINCT FROM account_group_id THEN
+        RAISE EXCEPTION 'task group account does not belong to its workspace';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_tasks_group_account_scope
+BEFORE INSERT OR UPDATE OF workspace_id, group_account_id ON tasks
+FOR EACH ROW EXECUTE FUNCTION validate_task_group_account();
+
 INSERT INTO schema_metadata(key, value)
 VALUES ('task_roster_ownership_model', '1')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;

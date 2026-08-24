@@ -55,6 +55,7 @@
 - 当前管理 API：`/me`、`/logout`、`/groups`、`/groups/{group_id}/accounts`、`/users`（仅 L3）。写请求必须带 `X-CSRF-Token`。
 - /admin/、/Admin/ 和其他大小写变体返回 404，不做重定向。
 - L2 只能查看自己具有 L2 身份的群组；L3 管理服务器全部资源。
+- 最后一个 L2 的解绑或降级会被阻止；L3 接管群组时可执行该操作，之后由 L3 继续管理群组。
 
 主要错误码：FORBIDDEN_SCOPE、ROLE_ESCALATION、LAST_SUPER_ADMIN、LAST_GROUP_ADMIN、INVITE_EXPIRED、INVITE_REVOKED、INVITE_EXHAUSTED、INVITE_ACCOUNT_BOUND、ALREADY_GROUP_MEMBER、DEPENDENCY_UNAVAILABLE、RATE_LIMITED。
 

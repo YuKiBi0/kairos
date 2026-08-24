@@ -307,6 +307,16 @@ func requireGroupManager(ctx context.Context, tx pgx.Tx, actorID, groupID uuid.U
 	return nil
 }
 
+func actorIsSuperAdminTx(ctx context.Context, tx pgx.Tx, actorID uuid.UUID) (bool, error) {
+	var active bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM server_roles
+			WHERE user_id = $1 AND role = 'L3' AND active
+		)`, actorID).Scan(&active)
+	return active, err
+}
+
 func (s *Store) BindGroupAccount(ctx context.Context, actorID, groupID, accountID, targetUserID uuid.UUID) (GroupAccountLink, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -370,6 +380,10 @@ func (s *Store) UnbindGroupAccount(ctx context.Context, actorID, groupID, accoun
 	if err := requireGroupManager(ctx, tx, actorID, groupID); err != nil {
 		return err
 	}
+	actorIsL3, err := actorIsSuperAdminTx(ctx, tx, actorID)
+	if err != nil {
+		return err
+	}
 	var role string
 	if err := tx.QueryRow(ctx, `
 		SELECT account.role
@@ -389,7 +403,7 @@ func (s *Store) UnbindGroupAccount(ctx context.Context, actorID, groupID, accoun
 			WHERE account.group_id = $1 AND account.active AND account.role = 'L2'`, groupID).Scan(&count); err != nil {
 			return err
 		}
-		if count <= 1 {
+		if count <= 1 && !actorIsL3 {
 			return ErrLastGroupAdmin
 		}
 	}
@@ -422,6 +436,10 @@ func (s *Store) SetGroupAccountRole(ctx context.Context, actorID, groupID, accou
 	if err := requireGroupManager(ctx, tx, actorID, groupID); err != nil {
 		return err
 	}
+	actorIsL3, err := actorIsSuperAdminTx(ctx, tx, actorID)
+	if err != nil {
+		return err
+	}
 	var currentRole string
 	var currentlyBound bool
 	if err := tx.QueryRow(ctx, `
@@ -442,7 +460,7 @@ func (s *Store) SetGroupAccountRole(ctx context.Context, actorID, groupID, accou
 			WHERE account.group_id = $1 AND account.active AND account.role = 'L2'`, groupID).Scan(&count); err != nil {
 			return err
 		}
-		if count <= 1 {
+		if count <= 1 && !actorIsL3 {
 			return ErrLastGroupAdmin
 		}
 	}

@@ -227,7 +227,7 @@ Redis 用于登录与邀请兑换限流、KairosAdmin 会话、短期查询缓�
 | P1 | 审计日志保留多久、谁能看？ | L3 查看全局，L2 查看自己群组；MVP 默认长期保留，仅支持导出和运维归档 | `beta.2` 前 |
 | P1 | `/KairosAdmin` 是否允许补斜杠跳转？ | 仅 `/KairosAdmin/` 为入口；不对其他拼写或大小写提供重定向 | `beta.2` 前 |
 
-如果采用上述默认值，数据库设计应提前保留 `task_owner_group_account_id`、`visibility`、稳定花名册编号、绑定有效期和操作者字段，避免在协作阶段再次进行高风险重构。
+本轮已落地 `group_account_id`、`shared_at`、稳定花名册编号和操作者字段；后续仍需在复制任务到个人空间时明确跨空间引用和审计规则，避免把群组任务原地迁移造成归属失真。
 
 ## 7. Definition of Done
 
