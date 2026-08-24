@@ -1,64 +1,84 @@
-# API v2（MVP 2.0 开发中）
+# API v2
 
-基础路径为 /api/v2，时间使用 RFC 3339 UTC。客户端使用 Bearer 令牌，管理面板使用 HttpOnly、Secure、SameSite=Strict 会话 Cookie 和 CSRF token。所有 workspace_id、group_id、角色均由服务端重新授权。
+API v2 是 MVP 2.0 的多工作空间接口。基础路径为 `/api/v2`，正文使用 JSON，时间使用 RFC 3339 UTC。客户端使用 Bearer token；KairosAdmin 使用 HttpOnly、Secure、SameSite 管理会话 Cookie 和 CSRF token。服务端每次请求重新校验工作空间和群组角色。
 
-## 工作空间
+## 工作空间与同步
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | /workspaces | 当前真实账号可访问的个人和群组空间，包含 display_name 与 role |
-| GET | /workspaces/{workspace_id} | 工作空间摘要与群组身份 |
-| GET | /workspaces/{workspace_id}/sync/snapshot | 首次快照 |
-| GET | /workspaces/{workspace_id}/sync/changes | 游标增量 |
-| POST | /workspaces/{workspace_id}/sync/push | 幂等批量上传 |
-| GET | /workspaces/{workspace_id}/sync/status | 服务端游标状态 |
-| GET | /realtime | WebSocket 通知，消息包含 workspace_id，不包含任务正文 |
+| 方法 | 路径 | 最低条件 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/workspaces` | 已登录 | 当前真实账号可访问的个人和群组空间 |
+| GET | `/workspaces/{workspace_id}` | 空间成员 | 工作空间摘要、群组身份和角色 |
+| GET | `/workspaces/{workspace_id}/sync/snapshot` | 空间成员 | 首次快照 |
+| GET | `/workspaces/{workspace_id}/sync/changes` | 空间成员 | 游标增量 |
+| POST | `/workspaces/{workspace_id}/sync/push` | 空间成员 | 幂等批量上传 |
+| GET | `/workspaces/{workspace_id}/sync/status` | 空间成员 | 服务端游标 |
 
-群组任务默认只对创建者可见。群组管理员开启协作后，任务所有者（或群组管理员）可通过同步操作写入 `shared_at` 时间戳显式共享；将其写回 `null` 会撤销共享。未共享任务对其他成员的快照和增量接口返回不可见/删除标记，成员不能写入。个人工作空间不接受 `shared_at`。
+群组任务默认仅创建者可见。L2/L3 开启协作后，任务所有者或管理员可通过同步操作写入 `shared_at` 显式共享；未共享任务对其他成员不可见，也不能写入。个人工作空间不接受 `shared_at`。
 
-群组任务同步实体额外包含 `group_account_id`、`created_by_user_id` 和 `last_operated_by_user_id`：前者记录花名册归属，后两者记录真实账号的创建者和最后操作者；这些字段由服务端写入，客户端不能通过任务变更伪造。
+群组任务中的 `group_account_id`、`created_by_user_id` 和 `last_operated_by_user_id` 由服务端维护，客户端不能通过 operation 伪造。
 
-## 群组和花名册
+当前服务端的实时连接仍是 v1 的 `GET /api/v1/realtime`；v2 路由提供空间目录和按工作空间隔离的同步接口。实时消息不包含任务正文，客户端始终以 changes 接口为准。
 
-| 方法 | 路径 | 最低角色 |
-| --- | --- | --- |
-| POST | /groups | 已登录真实账号；创建者自动成为首个 L2 |
-| GET | /groups/{group_id} | 群组 L1 |
-| GET/POST | /groups/{group_id}/accounts | 群组 L2 |
-| PATCH | /groups/{group_id}/accounts/{id} | 群组 L2 |
-| POST | /groups/{group_id}/accounts/{id}/bind | 群组 L2，精确账号标识 |
-| POST | /groups/{group_id}/accounts/{id}/unbind | 群组 L2 |
-| POST | /groups/{group_id}/collaboration | 群组 L2，永久开启 |
-| PUT | /groups/{group_id}/accounts/{id}/role | L2 可授予 L1/L2，L3 可授予 L1/L2/L3 |
+## 群组与花名册
+
+| 方法 | 路径 | 最低角色 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/groups` | 已登录 | 创建群组，创建者自动成为首个 L2 |
+| GET | `/groups/{group_id}` | 群组成员 | 群组资料 |
+| GET | `/groups/{group_id}/accounts` | L2/L3 | 花名册 |
+| POST | `/groups/{group_id}/accounts` | L2/L3 | 创建群组账号 |
+| POST | `/groups/{group_id}/accounts/{account_id}/bind` | L2/L3 | 绑定真实账号 |
+| POST | `/groups/{group_id}/accounts/{account_id}/unbind` | L2/L3 | 解绑并撤权 |
+| PUT | `/groups/{group_id}/accounts/{account_id}/role` | L2/L3 | 分配 L1/L2/L3，受越级规则限制 |
+| POST | `/groups/{group_id}/collaboration` | L2/L3 | 永久开启协作 |
+
+L2 只能管理自己具有 L2 身份的群组，不能查看全服务器账号或授予 L3。L3 可以管理所有群组和服务器账号。绑定请求使用精确的 `user_id`，不会提供模糊账号枚举。
 
 ## 邀请码
 
-- GET /groups/{group_id}/invites 查看邀请码元数据（不返回原始码）。
-- POST /groups/{group_id}/invites 创建邀请码；原始码只在创建响应返回。
-- DELETE /groups/{group_id}/invites/{id} 撤销邀请码。
-- POST /group-invites/redeem 由当前真实账号兑换邀请码。
-- 兑换请求必须携带 UUID `idempotency_key`；同一成功兑换重复提交返回原结果，不重复计数。
-- 兑换按真实账号限制为每 60 秒最多 10 次尝试；超限返回 `429 RATE_LIMITED`，Redis 不可用时失败关闭并返回 `503 DEPENDENCY_UNAVAILABLE`。
-- expires_at 必须晚于当前时间且不超过创建后 30 天。
-- max_uses 为空表示有效期内无限次，否则必须大于零。
-- 指定 target_group_account_id 时 max_uses 强制为 1，目标必须未绑定。
-- 兑换在 PostgreSQL 单事务中锁定邀请和花名册账号；绑定成功后才增加次数。
-- KairosAdmin 在 `/KairosAdmin/api/groups/{group_id}/invites` 提供同等的列表、创建和撤销能力，并沿用管理会话、CSRF 与 L2/L3 群组作用域。
-- 群组创建、花名册创建/绑定/解绑、邀请码创建/撤销、协作开关、角色变更和 KairosAdmin 全部写操作在 Redis 不可用时失败关闭并返回 `503 DEPENDENCY_UNAVAILABLE`。
-- 重复提交同一次成功兑换幂等，不重复计数。
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/groups/{group_id}/invites` | 查看元数据，不返回原始码 |
+| POST | `/groups/{group_id}/invites` | 创建邀请码，原始码只在创建响应返回 |
+| DELETE | `/groups/{group_id}/invites/{invite_id}` | 撤销邀请码 |
+| POST | `/group-invites/redeem` | 当前真实账号兑换邀请码 |
+
+创建请求示例：
+
+```json
+{
+  "target_group_account_id": "uuid-or-omit",
+  "max_uses": null,
+  "expires_at": "2026-08-30T12:00:00Z"
+}
+```
+
+`expires_at` 必须晚于当前时间且不超过创建后 30 天；`max_uses=null` 表示有效期内不限次数；指定 `target_group_account_id` 时强制单次使用。兑换请求必须携带 UUID `idempotency_key`，每个真实账号每 60 秒最多 10 次尝试。Redis 不可用返回 `503 DEPENDENCY_UNAVAILABLE`，超限返回 `429 RATE_LIMITED`。
 
 ## KairosAdmin
 
-- 页面入口：/KairosAdmin/，大小写敏感。
-- 管理登录：POST `/KairosAdmin/api/login`；登录后使用 `/KairosAdmin/api/*`。
-- 管理登录按账号摘要每 60 秒最多允许 10 次尝试；Redis 不可用时返回 `503 DEPENDENCY_UNAVAILABLE`，超限返回 `429 RATE_LIMITED`。
-- 当前管理 API：`/me`、`/logout`、`/groups`、`/groups/{group_id}/accounts`、`/users`（仅 L3）。写请求必须带 `X-CSRF-Token`。
-- /admin/、/Admin/ 和其他大小写变体返回 404，不做重定向。
-- L2 只能查看自己具有 L2 身份的群组；L3 管理服务器全部资源。
-- 最后一个 L2 的解绑或降级会被阻止；L3 接管群组时可执行该操作，之后由 L3 继续管理群组。
+页面入口是大小写敏感的 `/KairosAdmin/`，`/admin/`、`/Admin/` 和其他变体均返回 404。
 
-主要错误码：FORBIDDEN_SCOPE、ROLE_ESCALATION、LAST_SUPER_ADMIN、LAST_GROUP_ADMIN、INVITE_EXPIRED、INVITE_REVOKED、INVITE_EXHAUSTED、INVITE_ACCOUNT_BOUND、ALREADY_GROUP_MEMBER、DEPENDENCY_UNAVAILABLE、RATE_LIMITED。
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/KairosAdmin/api/login` | 建立管理会话 |
+| GET | `/KairosAdmin/api/me` | 当前管理员和 CSRF token |
+| POST | `/KairosAdmin/api/logout` | 注销会话 |
+| GET/POST | `/KairosAdmin/api/users` | L3 查看/创建服务器账号 |
+| PUT | `/KairosAdmin/api/users/{user_id}/disabled` | L3 停用或恢复账号 |
+| PUT | `/KairosAdmin/api/users/{user_id}/super-admin` | L3 管理 L3 |
+| GET/POST | `/KairosAdmin/api/groups` | 按作用域查看或创建群组 |
+| GET/POST | `/KairosAdmin/api/groups/{group_id}/accounts` | 花名册 |
+| PUT/POST | `/KairosAdmin/api/groups/{group_id}/accounts/{account_id}/role` | 角色、绑定和解绑 |
+| POST | `/KairosAdmin/api/groups/{group_id}/collaboration` | 开启协作 |
+| GET/POST/DELETE | `/KairosAdmin/api/groups/{group_id}/invites` | 邀请码管理 |
 
-## 客户端撤权恢复
+所有写请求带 `X-CSRF-Token`。L2 只能看到和管理自己的群组，L3 管理全服务器。管理登录和敏感写操作依赖 Redis，按账号摘要限流每 60 秒最多 10 次。
 
-群组成员失去访问权后，工作空间同步返回 `403 FORBIDDEN_SCOPE`；客户端将该空间标记为只读，暂停待上传操作，不再重试提交。设置页可导出 `kairos-recovery-*.json` 恢复包，文件包含本地业务数据和待上传操作，不包含凭据。
+## 错误码
+
+常见错误包括：`UNAUTHORIZED`、`FORBIDDEN_SCOPE`、`ROLE_ESCALATION`、`LAST_SUPER_ADMIN`、`LAST_GROUP_ADMIN`、`INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_REVOKED`、`INVITE_EXHAUSTED`、`INVITE_ACCOUNT_BOUND`、`ALREADY_GROUP_MEMBER`、`DEPENDENCY_UNAVAILABLE`、`RATE_LIMITED` 和 `CURSOR_AHEAD`。
+
+## 撤权恢复
+
+群组成员失去访问权后，工作空间同步返回 `403 FORBIDDEN_SCOPE`。客户端把该空间标记为只读、暂停待上传操作，并可导出 `kairos-recovery-*.json` 恢复包；恢复包包含本地业务数据和待上传操作，不包含凭据。
