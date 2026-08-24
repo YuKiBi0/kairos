@@ -189,6 +189,10 @@ func (a *API) adminAuthenticate(next http.Handler) http.Handler {
 		}
 		ctx := contextWithAdmin(r.Context(), session, role)
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if err := a.redis.Ping(r.Context()); err != nil {
+				writeError(w, r, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "管理会话存储不可用")
+				return
+			}
 			csrf := r.Header.Get("X-CSRF-Token")
 			if len(csrf) != len(session.CSRF) || subtle.ConstantTimeCompare([]byte(csrf), []byte(session.CSRF)) != 1 {
 				writeError(w, r, http.StatusForbidden, "CSRF_FAILED", "请求校验失败")

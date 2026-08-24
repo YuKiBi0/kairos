@@ -24,6 +24,30 @@ func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"workspaces": workspaces})
 }
 
+func (a *API) workspaceDetail(w http.ResponseWriter, r *http.Request) {
+	userID, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
+		return
+	}
+	workspaceID, ok := workspaceIDParam(w, r)
+	if !ok {
+		return
+	}
+	workspaces, err := a.store.ListAccessibleWorkspaces(r.Context(), userID)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "DATABASE_ERROR", "无法读取工作空间")
+		return
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID == workspaceID {
+			writeJSON(w, http.StatusOK, map[string]any{"workspace": workspace})
+			return
+		}
+	}
+	writeError(w, r, http.StatusNotFound, "NOT_FOUND", "工作空间不存在")
+}
+
 type createGroupRequest struct {
 	Name string `json:"name"`
 }
@@ -32,6 +56,9 @@ func (a *API) createGroup(w http.ResponseWriter, r *http.Request) {
 	userID, _, ok := identity(r.Context())
 	if !ok {
 		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
 		return
 	}
 	var request createGroupRequest
@@ -113,6 +140,9 @@ func (a *API) createGroupAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
 	var request createGroupAccountRequest
 	if !decodeJSON(w, r, &request) {
 		return
@@ -136,6 +166,9 @@ func (a *API) bindGroupAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	groupID, accountID, ok := groupAccountParams(w, r)
 	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
 		return
 	}
 	var request bindGroupAccountRequest
@@ -166,6 +199,9 @@ func (a *API) unbindGroupAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	groupID, accountID, ok := groupAccountParams(w, r)
 	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
 		return
 	}
 	var request unbindGroupAccountRequest
@@ -213,6 +249,9 @@ func (a *API) enableCollaboration(w http.ResponseWriter, r *http.Request) {
 	}
 	groupID, ok := groupIDParam(w, r)
 	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
 		return
 	}
 	if handleGroupError(w, r, a.store.SetCollaborationEnabled(r.Context(), actorID, groupID)) {

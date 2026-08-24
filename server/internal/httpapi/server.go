@@ -115,6 +115,7 @@ func NewWithRedis(
 			protected.Post("/workspaces/{workspace_id}/sync/push", api.workspacePush)
 			protected.Get("/workspaces/{workspace_id}/sync/status", api.workspaceSyncStatus)
 			protected.Get("/workspaces", api.workspaces)
+			protected.Get("/workspaces/{workspace_id}", api.workspaceDetail)
 			protected.Post("/groups", api.createGroup)
 			protected.Get("/groups/{group_id}", api.groupDetail)
 			protected.Get("/groups/{group_id}/accounts", api.groupAccounts)

@@ -83,6 +83,14 @@ func TestWorkspaceSyncRoutesEnforceScope(t *testing.T) {
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"display_name":"个人任务"`)) {
 		t.Fatalf("workspace catalog should include display name: status=%d body=%s", status, body)
 	}
+	status, body = requestAPI(t, http.MethodGet, server.URL+"/api/v2/workspaces/"+personal.ID.String(), ownerToken, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(personal.ID.String())) {
+		t.Fatalf("workspace detail should include the requested workspace: status=%d body=%s", status, body)
+	}
+	status, _ = requestAPI(t, http.MethodGet, server.URL+"/api/v2/workspaces/"+group.WorkspaceID.String(), otherToken, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("inaccessible workspace detail should be hidden, got %d", status)
+	}
 }
 
 func cleanupWorkspaceAPI(databaseURL string, groupID uuid.UUID, userIDs ...uuid.UUID) {
