@@ -34,6 +34,138 @@
     try { $(errorId).textContent = ''; await fn(); }
     catch (error) { $(errorId).textContent = error.message; }
   };
+  const localDateTimeValue = (date) => {
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+  };
+  const inviteState = (invite) => {
+    if (invite.revoked_at) return { label: '已撤销', active: false };
+    if (new Date(invite.expires_at).getTime() <= Date.now()) return { label: '已过期', active: false };
+    if (invite.max_uses !== undefined && invite.use_count >= invite.max_uses) {
+      return { label: '已用尽', active: false };
+    }
+    return { label: '可使用', active: true };
+  };
+  const renderInvites = async (group, accounts, container) => {
+    container.textContent = '加载邀请码中...';
+    try {
+      const result = await api('/groups/' + group.id + '/invites');
+      container.replaceChildren();
+      for (const invite of result.invites || []) {
+        const state = inviteState(invite);
+        const row = node('div', 'invite');
+        const main = node('div', 'account-main');
+        const detail = node('div');
+        const target = accounts.find((account) => account.id === invite.target_group_account_id);
+        const usage = invite.max_uses === undefined
+          ? invite.use_count + ' 次 / 不限'
+          : invite.use_count + ' / ' + invite.max_uses + ' 次';
+        detail.append(
+          node('strong', '', target ? '花名册：' + target.display_name : '普通邀请码'),
+          node('div', 'meta', usage + ' · 有效至 ' + new Date(invite.expires_at).toLocaleString()),
+        );
+        main.append(detail, node('span', 'badge', state.label));
+        row.append(main);
+        if (state.active) {
+          const actions = node('div', 'actions');
+          actions.append(button('撤销', async () => {
+            if (!window.confirm('撤销后该邀请码立即失效，确定继续？')) return;
+            await mutate('/groups/' + group.id + '/invites/' + invite.id, 'DELETE');
+            await renderInvites(group, accounts, container);
+          }, 'danger'));
+          row.append(actions);
+        }
+        container.append(row);
+      }
+      if (!result.invites?.length) container.textContent = '暂无邀请码';
+    } catch (error) {
+      container.textContent = error.message;
+    }
+  };
+  const inviteManager = (group, accounts) => {
+    const section = node('section', 'subsection');
+    section.append(node('h3', '', '邀请码'));
+    const form = node('form', 'action-form invite-form');
+
+    const expiryLabel = node('label', '', '有效至');
+    const expiry = node('input');
+    expiry.name = 'expires_at'; expiry.type = 'datetime-local'; expiry.required = true; expiry.step = '60';
+    const now = new Date();
+    expiry.min = localDateTimeValue(new Date(now.getTime() + 60000));
+    expiry.max = localDateTimeValue(new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000));
+    expiry.value = localDateTimeValue(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000));
+    expiryLabel.append(expiry);
+
+    const usesLabel = node('label', '', '最多使用次数');
+    const uses = node('input');
+    uses.name = 'max_uses'; uses.type = 'number'; uses.min = '1'; uses.step = '1';
+    uses.placeholder = '留空表示不限次数';
+    usesLabel.append(uses);
+
+    const targetLabel = node('label', '', '认领花名册账号');
+    const target = node('select');
+    target.name = 'target_group_account_id';
+    const ordinary = node('option', '', '不指定');
+    ordinary.value = '';
+    target.append(ordinary);
+    for (const account of accounts.filter((item) => item.active && !item.username)) {
+      const option = node('option', '', account.display_name + ' · ' + account.account_code);
+      option.value = account.id;
+      target.append(option);
+    }
+    target.addEventListener('change', () => {
+      if (target.value) {
+        uses.dataset.previous = uses.value;
+        uses.value = '1';
+        uses.disabled = true;
+      } else {
+        uses.disabled = false;
+        uses.value = uses.dataset.previous || '';
+      }
+    });
+    targetLabel.append(target);
+
+    const submit = node('button', '', '生成邀请码');
+    form.append(expiryLabel, usesLabel, targetLabel, submit);
+    const result = node('div', 'invite-result hidden');
+    const list = node('div', 'invites');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      try {
+        const payload = { expires_at: new Date(expiry.value).toISOString() };
+        if (target.value) {
+          payload.target_group_account_id = target.value;
+          payload.max_uses = 1;
+        } else if (uses.value) {
+          payload.max_uses = Number(uses.value);
+        }
+        const created = await mutate('/groups/' + group.id + '/invites', 'POST', payload);
+        const code = node('code', '', created.code);
+        const copy = button('复制', async () => {
+          try {
+            await navigator.clipboard.writeText(created.code);
+            copy.textContent = '已复制';
+          } catch (_) {
+            window.prompt('复制邀请码', created.code);
+          }
+        }, 'quiet');
+        result.replaceChildren(node('span', 'label', '新邀请码'), code, copy);
+        result.classList.remove('hidden');
+        form.reset();
+        expiry.value = localDateTimeValue(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+        uses.disabled = false;
+        await renderInvites(group, accounts, list);
+      } catch (error) {
+        window.alert(error.message);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    section.append(form, result, list);
+    void renderInvites(group, accounts, list);
+    return section;
+  };
 
   const accountRow = (group, account) => {
     const row = node('div', 'account');
@@ -105,11 +237,14 @@
     });
     item.append(form);
     const accounts = node('div', 'accounts', '加载花名册中...'); item.append(accounts);
+    let accountValues = [];
     try {
       const result = await api(`/groups/${group.id}/accounts`); accounts.replaceChildren();
-      for (const account of result.accounts || []) accounts.append(accountRow(group, account));
+      accountValues = result.accounts || [];
+      for (const account of accountValues) accounts.append(accountRow(group, account));
       if (!result.accounts?.length) accounts.textContent = '暂无花名册账号';
     } catch (error) { accounts.textContent = error.message; }
+    item.append(inviteManager(group, accountValues));
     return item;
   };
 

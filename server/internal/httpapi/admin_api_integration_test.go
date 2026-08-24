@@ -23,9 +23,10 @@ import (
 )
 
 type adminRedisFake struct {
-	mu   sync.Mutex
-	data map[string]string
-	fail bool
+	mu    sync.Mutex
+	data  map[string]string
+	rates map[string]int64
+	fail  bool
 }
 
 func (f *adminRedisFake) Ping(context.Context) error {
@@ -58,6 +59,15 @@ func (f *adminRedisFake) Command(_ context.Context, command string, args ...stri
 	case "DEL":
 		delete(f.data, args[0])
 		return int64(1), nil
+	case "EVAL":
+		if len(args) != 3 || args[1] != "1" {
+			return nil, io.ErrUnexpectedEOF
+		}
+		if f.rates == nil {
+			f.rates = map[string]int64{}
+		}
+		f.rates[args[2]]++
+		return f.rates[args[2]], nil
 	default:
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -246,6 +256,49 @@ func TestAdminManagementRoutesRequireCSRFAndMutateScopedResources(t *testing.T) 
 	if err != nil || group.CollaborationEnabledAt == nil {
 		t.Fatalf("collaboration was not persisted: group=%#v err=%v", group, err)
 	}
+	inviteResponse := requestAdmin(http.MethodPost, "/KairosAdmin/api/groups/"+created.Group.ID.String()+"/invites", map[string]any{
+		"max_uses":   2,
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	}, "")
+	inviteResponse.Body.Close()
+	if inviteResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin invite creation without CSRF should fail: %d", inviteResponse.StatusCode)
+	}
+	inviteResponse = requestAdmin(http.MethodPost, "/KairosAdmin/api/groups/"+created.Group.ID.String()+"/invites", map[string]any{
+		"max_uses":   2,
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	}, login.CSRFToken)
+	var createdInvite struct {
+		Invite store.GroupInvite `json:"invite"`
+		Code   string            `json:"code"`
+	}
+	if inviteResponse.StatusCode != http.StatusCreated || json.NewDecoder(inviteResponse.Body).Decode(&createdInvite) != nil {
+		t.Fatalf("admin invite creation failed: %d", inviteResponse.StatusCode)
+	}
+	inviteResponse.Body.Close()
+	if createdInvite.Code == "" || createdInvite.Invite.GroupID != created.Group.ID || createdInvite.Invite.MaxUses == nil || *createdInvite.Invite.MaxUses != 2 {
+		t.Fatalf("admin invite response is incomplete: %#v", createdInvite)
+	}
+	inviteResponse = requestAdmin(http.MethodGet, "/KairosAdmin/api/groups/"+created.Group.ID.String()+"/invites", nil, "")
+	var listed struct {
+		Invites []store.GroupInvite `json:"invites"`
+	}
+	if inviteResponse.StatusCode != http.StatusOK || json.NewDecoder(inviteResponse.Body).Decode(&listed) != nil {
+		t.Fatalf("admin invite listing failed: %d", inviteResponse.StatusCode)
+	}
+	inviteResponse.Body.Close()
+	if len(listed.Invites) != 1 || listed.Invites[0].ID != createdInvite.Invite.ID {
+		t.Fatalf("admin invite listing returned unexpected data: %#v", listed)
+	}
+	inviteResponse = requestAdmin(http.MethodDelete, "/KairosAdmin/api/groups/"+created.Group.ID.String()+"/invites/"+createdInvite.Invite.ID.String(), nil, login.CSRFToken)
+	inviteResponse.Body.Close()
+	if inviteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("admin invite revoke failed: %d", inviteResponse.StatusCode)
+	}
+	listedInvite, err := database.ListGroupInvites(ctx, user.ID, created.Group.ID)
+	if err != nil || len(listedInvite) != 1 || listedInvite[0].RevokedAt == nil {
+		t.Fatalf("admin invite revoke was not persisted: invites=%#v err=%v", listedInvite, err)
+	}
 }
 
 func cleanupGroupFixtureHTTP(ctx context.Context, t *testing.T, databaseURL string, groupID, userID uuid.UUID) {
@@ -258,6 +311,8 @@ func cleanupGroupFixtureHTTP(ctx context.Context, t *testing.T, databaseURL stri
 	_, _ = connection.Exec(ctx, `SET CONSTRAINTS ALL DEFERRED`)
 	_, _ = connection.Exec(ctx, `DELETE FROM audit_events WHERE group_id=$1 OR actor_user_id=$2`, groupID, userID)
 	if groupID != uuid.Nil {
+		_, _ = connection.Exec(ctx, `DELETE FROM group_invite_redemptions WHERE invite_id IN (SELECT id FROM group_invites WHERE group_id=$1)`, groupID)
+		_, _ = connection.Exec(ctx, `DELETE FROM group_invites WHERE group_id=$1`, groupID)
 		_, _ = connection.Exec(ctx, `DELETE FROM group_account_links WHERE group_id=$1`, groupID)
 		_, _ = connection.Exec(ctx, `DELETE FROM group_accounts WHERE group_id=$1`, groupID)
 		_, _ = connection.Exec(ctx, `DELETE FROM groups WHERE id=$1`, groupID)

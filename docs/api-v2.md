@@ -41,14 +41,17 @@
 - max_uses 为空表示有效期内无限次，否则必须大于零。
 - 指定 target_group_account_id 时 max_uses 强制为 1，目标必须未绑定。
 - 兑换在 PostgreSQL 单事务中锁定邀请和花名册账号；绑定成功后才增加次数。
+- KairosAdmin 在 `/KairosAdmin/api/groups/{group_id}/invites` 提供同等的列表、创建和撤销能力，并沿用管理会话、CSRF 与 L2/L3 群组作用域。
+- 群组角色与服务器 L3 角色变更在 Redis 不可用时失败关闭并返回 `503 DEPENDENCY_UNAVAILABLE`。
 - 重复提交同一次成功兑换幂等，不重复计数。
 
 ## KairosAdmin
 
 - 页面入口：/KairosAdmin/，大小写敏感。
 - 管理登录：POST `/KairosAdmin/api/login`；登录后使用 `/KairosAdmin/api/*`。
+- 管理登录按账号摘要每 60 秒最多允许 10 次尝试；Redis 不可用时返回 `503 DEPENDENCY_UNAVAILABLE`，超限返回 `429 RATE_LIMITED`。
 - 当前管理 API：`/me`、`/logout`、`/groups`、`/groups/{group_id}/accounts`、`/users`（仅 L3）。写请求必须带 `X-CSRF-Token`。
 - /admin/、/Admin/ 和其他大小写变体返回 404，不做重定向。
 - L2 只能查看自己具有 L2 身份的群组；L3 管理服务器全部资源。
 
-主要错误码：FORBIDDEN_SCOPE、ROLE_ESCALATION、LAST_SUPER_ADMIN、LAST_GROUP_ADMIN、INVITE_EXPIRED、INVITE_REVOKED、INVITE_EXHAUSTED、INVITE_ACCOUNT_BOUND、ALREADY_GROUP_MEMBER、DEPENDENCY_UNAVAILABLE。
+主要错误码：FORBIDDEN_SCOPE、ROLE_ESCALATION、LAST_SUPER_ADMIN、LAST_GROUP_ADMIN、INVITE_EXPIRED、INVITE_REVOKED、INVITE_EXHAUSTED、INVITE_ACCOUNT_BOUND、ALREADY_GROUP_MEMBER、DEPENDENCY_UNAVAILABLE、RATE_LIMITED。

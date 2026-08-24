@@ -113,6 +113,9 @@ func (a *API) adminSetAccountRole(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
 	if err := a.store.SetGroupAccountRole(r.Context(), adminUserID(r), groupID, accountID, request.Role); err != nil {
 		handleGroupError(w, r, err)
 		return
@@ -178,6 +181,30 @@ func (a *API) adminEnableCollaboration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) adminListInvites(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := groupIDParam(w, r)
+	if !ok {
+		return
+	}
+	a.listInvitesForActor(w, r, adminUserID(r), groupID)
+}
+
+func (a *API) adminCreateInvite(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := groupIDParam(w, r)
+	if !ok {
+		return
+	}
+	a.createInviteForActor(w, r, adminUserID(r), groupID)
+}
+
+func (a *API) adminRevokeInvite(w http.ResponseWriter, r *http.Request) {
+	groupID, inviteID, ok := inviteParams(w, r)
+	if !ok {
+		return
+	}
+	a.revokeInviteForActor(w, r, adminUserID(r), groupID, inviteID)
 }
 
 func (a *API) adminCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -247,6 +274,9 @@ func (a *API) adminSetSuperAdmin(w http.ResponseWriter, r *http.Request) {
 		Active bool `json:"active"`
 	}
 	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
 		return
 	}
 	if err := a.store.SetServerSuperAdmin(r.Context(), adminUserID(r), targetID, request.Active); err != nil {

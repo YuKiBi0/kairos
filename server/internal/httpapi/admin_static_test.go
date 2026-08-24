@@ -64,7 +64,7 @@ func TestKairosAdminIncludesResourceManagementControls(t *testing.T) {
 				t.Fatalf("admin page missing %s", expected)
 			}
 		}
-		for _, expected := range []string{"/collaboration", "/unbind", "/super-admin", "/disabled"} {
+		for _, expected := range []string{"/collaboration", "/unbind", "/super-admin", "/disabled", "/invites", "target_group_account_id", "expires_at"} {
 			if path != "/KairosAdmin/" && !strings.Contains(content, expected) {
 				t.Fatalf("admin script missing management action %s", expected)
 			}

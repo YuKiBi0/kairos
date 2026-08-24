@@ -196,6 +196,9 @@ func (a *API) setGroupAccountRole(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
 	if handleGroupError(w, r, a.store.SetGroupAccountRole(r.Context(), actorID, groupID, accountID, request.Role)) {
 		return
 	}

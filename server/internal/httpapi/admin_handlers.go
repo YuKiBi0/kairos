@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -20,7 +21,10 @@ import (
 const (
 	adminSessionCookie = "kairos_admin_session"
 	adminSessionTTL    = 8 * time.Hour
+	adminLoginLimit    = int64(10)
 )
+
+const adminLoginRateScript = `local current = redis.call('INCR', KEYS[1]); if current == 1 then redis.call('EXPIRE', KEYS[1], '60'); end; return current`
 
 type adminSession struct {
 	UserID    uuid.UUID `json:"user_id"`
@@ -81,6 +85,15 @@ func (a *API) adminLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	allowed, err := a.allowAdminLogin(r, request.Username)
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "管理登录服务暂时不可用")
+		return
+	}
+	if !allowed {
+		writeError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "管理登录尝试过于频繁")
+		return
+	}
 	user, err := a.store.UserByUsername(r.Context(), strings.TrimSpace(request.Username))
 	if err != nil {
 		a.rejectLogin(w, r)
@@ -119,6 +132,19 @@ func (a *API) adminLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: adminSessionCookie, Value: sessionID, Path: "/KairosAdmin/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: int(adminSessionTTL.Seconds())})
 	http.SetCookie(w, &http.Cookie{Name: "kairos_admin_csrf", Value: csrf, Path: "/KairosAdmin/", Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: int(adminSessionTTL.Seconds())})
 	writeJSON(w, http.StatusOK, map[string]any{"user": user, "role": role, "csrf_token": csrf, "expires_in": int64(adminSessionTTL.Seconds())})
+}
+
+func (a *API) allowAdminLogin(r *http.Request, username string) (bool, error) {
+	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(username))))
+	value, err := a.redisCommand(r, "EVAL", adminLoginRateScript, "1", "kairos:admin:login:"+hex.EncodeToString(digest[:]))
+	if err != nil {
+		return false, err
+	}
+	count, ok := value.(int64)
+	if !ok || count < 1 {
+		return false, errors.New("unexpected admin login rate limit response")
+	}
+	return count <= adminLoginLimit, nil
 }
 
 func (a *API) adminLogout(w http.ResponseWriter, r *http.Request) {

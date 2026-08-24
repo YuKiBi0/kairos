@@ -37,6 +37,10 @@ func (a *API) createInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	a.createInviteForActor(w, r, actorID, groupID)
+}
+
+func (a *API) createInviteForActor(w http.ResponseWriter, r *http.Request, actorID, groupID uuid.UUID) {
 	var request createInviteRequest
 	if !decodeJSON(w, r, &request) {
 		return
@@ -77,6 +81,10 @@ func (a *API) listInvites(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	a.listInvitesForActor(w, r, actorID, groupID)
+}
+
+func (a *API) listInvitesForActor(w http.ResponseWriter, r *http.Request, actorID, groupID uuid.UUID) {
 	items, err := a.store.ListGroupInvites(r.Context(), actorID, groupID)
 	if handleInviteError(w, r, err) {
 		return
@@ -94,6 +102,10 @@ func (a *API) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	a.revokeInviteForActor(w, r, actorID, groupID, inviteID)
+}
+
+func (a *API) revokeInviteForActor(w http.ResponseWriter, r *http.Request, actorID, groupID, inviteID uuid.UUID) {
 	if handleInviteError(w, r, a.store.RevokeGroupInvite(r.Context(), actorID, groupID, inviteID)) {
 		return
 	}

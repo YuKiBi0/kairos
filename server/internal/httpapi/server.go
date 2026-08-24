@@ -84,6 +84,9 @@ func NewWithRedis(
 		admin.Post("/groups/{group_id}/accounts/{account_id}/bind", api.adminBindAccount)
 		admin.Post("/groups/{group_id}/accounts/{account_id}/unbind", api.adminUnbindAccount)
 		admin.Post("/groups/{group_id}/collaboration", api.adminEnableCollaboration)
+		admin.Get("/groups/{group_id}/invites", api.adminListInvites)
+		admin.Post("/groups/{group_id}/invites", api.adminCreateInvite)
+		admin.Delete("/groups/{group_id}/invites/{invite_id}", api.adminRevokeInvite)
 	})
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Post("/auth/login", api.login)
@@ -140,6 +143,18 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": status, "redis": redisStatus})
+}
+
+func (a *API) requireRedisDependency(w http.ResponseWriter, r *http.Request) bool {
+	if a.redis == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "Redis 服务暂时不可用")
+		return false
+	}
+	if err := a.redis.Ping(r.Context()); err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "Redis 服务暂时不可用")
+		return false
+	}
+	return true
 }
 
 func (a *API) ready(w http.ResponseWriter, r *http.Request) {
