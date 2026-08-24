@@ -16,6 +16,10 @@ kairos-server --env-file <环境文件> <命令>
 KAIROS_ENV=production
 KAIROS_HTTP_ADDR=127.0.0.1:8080
 KAIROS_DATABASE_URL=postgres://kairos:URI编码后的数据库密码@127.0.0.1:5432/kairos?sslmode=disable
+KAIROS_REDIS_URL=redis://127.0.0.1:6379/0
+KAIROS_REDIS_REQUIRED=true
+KAIROS_REDIS_DIAL_TIMEOUT=500ms
+KAIROS_REDIS_COMMAND_TIMEOUT=500ms
 KAIROS_BASE_URL=https://kairos.example.com
 KAIROS_SESSION_SECRET=至少32个字符的随机会话密钥
 KAIROS_ACCESS_TTL=15m
@@ -31,11 +35,25 @@ KAIROS_BOOTSTRAP_PASSWORD=首次创建账号时使用的强密码
 
 `KAIROS_BOOTSTRAP_USERNAME` 和 `KAIROS_BOOTSTRAP_PASSWORD` 只用于 `create-user`，服务启动时不会使用它们。账号创建成功后，建议从环境文件删除这两行；如果保留，必须像数据库密码一样保护该文件。
 
+MVP 2.0 首次部署还需要在服务器主机执行一次 `bootstrap-super-admin`。它要求环境文件中的引导密码与目标真实账号密码一致，并且只在服务器尚无 L3 时成功。完成后应立即从环境文件删除引导密码：
+
+```text
+kairos-server --env-file /path/to/kairos.env bootstrap-super-admin owner
+```
+
 ## 2. PostgreSQL
 
 部署不需要 Docker。使用现有 PostgreSQL 或系统包安装的 PostgreSQL，创建数据库和用户，并让 `KAIROS_DATABASE_URL` 指向它。生产环境建议 PostgreSQL 和 Kairos 都只监听回环地址或内网地址。
 
-## 3. 源码运行
+## 3. Redis
+
+MVP 2.0 使用 Redis 处理限流、管理会话、短期缓存和多实例实时通知。Redis 不是账号、任务、邀请次数或审计记录的权威存储；这些数据仍保存在 PostgreSQL。
+
+生产环境建议将 `KAIROS_REDIS_REQUIRED` 设为 `true`，让 `/readyz` 在 Redis 不可用时拒绝接收流量。开发环境可以设为 `false`，服务会启动并通过 `/healthz` 报告 `degraded`；个人任务同步仍可用，但依赖 Redis 的敏感功能会在后续版本中失败关闭。
+
+使用密码或 ACL 时，将凭据放进 Redis URL，例如 `redis://:密码@127.0.0.1:6379/0` 或 `redis://kairos:密码@127.0.0.1:6379/0`。密码中的特殊字符必须进行 URI 编码。Redis 使用 TLS 时将协议改为 `rediss://`。
+
+## 4. 源码运行
 
 在仓库的 `server/` 目录执行。Windows PowerShell 和 Linux Bash 使用相同的程序参数，不需要先设置或导出环境变量：
 
@@ -65,7 +83,7 @@ go run ./cmd/kairos-server --env-file /etc/kairos/kairos.env serve
 
 `migrate` 只需在首次部署或数据库结构更新时执行；`create-user` 通常只执行一次；`serve` 是持续运行的服务。
 
-## 4. 编译后二进制运行
+## 5. 编译后二进制运行
 
 环境文件不参与编译。先编译，再在运行时传入环境文件即可。
 
@@ -91,7 +109,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o kai
 
 ARM64 服务器将 `GOARCH=amd64` 改为 `GOARCH=arm64`。二进制运行时，`KAIROS_MIGRATIONS_DIR` 必须指向包含 `*.sql` 文件的目录。
 
-## 5. Linux systemd 安装（可选）
+## 6. Linux systemd 安装（可选）
 
 如果希望服务开机自启，可使用安装脚本；它也直接把环境文件交给 Kairos，不依赖 shell 环境变量：
 
@@ -116,7 +134,7 @@ systemctl status kairos-server --no-pager
 curl http://127.0.0.1:8080/readyz
 ```
 
-## 6. 更新、卸载和反向代理
+## 7. 更新、卸载和反向代理
 
 更新二进制并迁移：
 
@@ -129,11 +147,11 @@ sudo deploy/update.sh --binary ./kairos-server \
 
 生产公网入口仍需自行配置 Nginx、域名、TLS 和防火墙。以 `deploy/nginx-kairos.conf.example` 为起点，反向代理必须保留 `Upgrade`、`Connection`、`Host`、`X-Forwarded-*` 和 `X-Request-ID` 请求头。公网只开放 Nginx 的 443，Kairos 和 PostgreSQL 绑定回环地址。
 
-## 7. 检查、备份和排障
+## 8. 检查、备份和排障
 
 ```text
-GET http://127.0.0.1:8080/healthz  只检查进程
-GET http://127.0.0.1:8080/readyz   检查进程、PostgreSQL 和迁移
+GET http://127.0.0.1:8080/healthz  检查进程并报告 Redis 状态
+GET http://127.0.0.1:8080/readyz   检查进程、PostgreSQL、迁移和必需的 Redis
 GET http://127.0.0.1:8080/version
 ```
 

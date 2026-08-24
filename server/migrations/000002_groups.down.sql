@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS group_account_links;
+DROP TABLE IF EXISTS group_accounts;
+DROP TABLE IF EXISTS server_roles;
+ALTER TABLE workspaces DROP CONSTRAINT IF EXISTS fk_workspaces_group;
+DROP TABLE IF EXISTS groups;
+DROP FUNCTION IF EXISTS prevent_collaboration_disable();
+DROP TABLE IF EXISTS workspaces;
+DELETE FROM schema_metadata WHERE key = 'groups_model';
+ALTER TABLE users DROP COLUMN IF EXISTS disabled_at;

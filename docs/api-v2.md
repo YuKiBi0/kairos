@@ -18,6 +18,7 @@
 
 | 方法 | 路径 | 最低角色 |
 | --- | --- | --- |
+| POST | /groups | 已登录真实账号；创建者自动成为首个 L2 |
 | GET | /groups/{group_id} | 群组 L1 |
 | GET/POST | /groups/{group_id}/accounts | 群组 L2 |
 | PATCH | /groups/{group_id}/accounts/{id} | 群组 L2 |
@@ -28,9 +29,11 @@
 
 ## 邀请码
 
+- GET /groups/{group_id}/invites 查看邀请码元数据（不返回原始码）。
 - POST /groups/{group_id}/invites 创建邀请码；原始码只在创建响应返回。
 - DELETE /groups/{group_id}/invites/{id} 撤销邀请码。
 - POST /group-invites/redeem 由当前真实账号兑换邀请码。
+- 兑换请求必须携带 UUID `idempotency_key`；同一成功兑换重复提交返回原结果，不重复计数。
 - expires_at 必须晚于当前时间且不超过创建后 30 天。
 - max_uses 为空表示有效期内无限次，否则必须大于零。
 - 指定 target_group_account_id 时 max_uses 强制为 1，目标必须未绑定。
