@@ -22,7 +22,7 @@ func (a *API) workspaceSnapshot(w http.ResponseWriter, r *http.Request) {
 	if _, err := a.store.WorkspaceForUser(r.Context(), userID, workspaceID); handleWorkspaceError(w, r, err) {
 		return
 	}
-	snapshot, err := a.store.WorkspaceSnapshot(r.Context(), workspaceID)
+	snapshot, err := a.store.WorkspaceSnapshot(r.Context(), workspaceID, userID)
 	if handleWorkspaceError(w, r, err) {
 		return
 	}
@@ -55,7 +55,7 @@ func (a *API) workspaceChanges(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	items, next, serverCursor, hasMore, err := a.store.WorkspaceChanges(r.Context(), workspaceID, after, limit)
+	items, next, serverCursor, hasMore, err := a.store.WorkspaceChanges(r.Context(), workspaceID, after, limit, userID)
 	if handleWorkspaceError(w, r, err) {
 		return
 	}

@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -94,6 +95,132 @@ func TestWorkspaceSnapshotIsolatedFromOtherSpaces(t *testing.T) {
 	}
 	if len(changes) != 1 || changes[0].EntityID != taskID {
 		t.Fatalf("unexpected workspace changes: %#v", changes)
+	}
+}
+
+func TestGroupTaskSharingRequiresCollaborationAndExplicitShare(t *testing.T) {
+	databaseURL := os.Getenv("KAIROS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("KAIROS_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	owner, err := database.CreateUser(ctx, "sharing-owner-"+uuid.NewString(), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := database.CreateUser(ctx, "sharing-member-"+uuid.NewString(), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, _, _, err := database.CreateGroup(ctx, owner.ID, "Sharing group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupGroupFixture(database, group.ID, owner.ID, member.ID)
+	account, err := database.CreateGroupAccount(ctx, owner.ID, group.ID, "member", "Member", "L1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.BindGroupAccount(ctx, owner.ID, group.ID, account.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownerDevice, err := database.UpsertDevice(ctx, owner.ID, nil, "sharing-owner", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberDevice, err := database.UpsertDevice(ctx, member.ID, nil, "sharing-member", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.New()
+	created, err := database.ApplyWorkspaceOperation(ctx, owner.ID, ownerDevice.ID, group.WorkspaceID, PushOperation{
+		OperationID: uuid.New(), EntityType: "task", EntityID: taskID,
+		Changes: map[string]json.RawMessage{
+			"title": json.RawMessage(`"private task"`), "quadrant": json.RawMessage(`2`),
+			"status": json.RawMessage(`0`), "sort_order": json.RawMessage(`0`),
+		}, ChangedFields: []string{"title", "quadrant", "status", "sort_order"},
+	})
+	if err != nil || created.Status != "applied" {
+		t.Fatalf("failed to create private group task: result=%#v err=%v", created, err)
+	}
+	memberSnapshot, err := database.WorkspaceSnapshot(ctx, group.WorkspaceID, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memberSnapshot.Tasks) != 0 {
+		t.Fatalf("private task leaked before sharing: %#v", memberSnapshot.Tasks)
+	}
+	denied, err := database.ApplyWorkspaceOperation(ctx, member.ID, memberDevice.ID, group.WorkspaceID, PushOperation{
+		OperationID: uuid.New(), EntityType: "task", EntityID: taskID, BaseVersion: created.Version,
+		Changes: map[string]json.RawMessage{"title": json.RawMessage(`"forbidden"`)}, ChangedFields: []string{"title"},
+	})
+	if err != nil || denied.Status != "rejected" || denied.Code != "FORBIDDEN_SCOPE" {
+		t.Fatalf("private task write should be rejected: result=%#v err=%v", denied, err)
+	}
+	bypass, err := database.ApplyWorkspaceOperation(ctx, owner.ID, ownerDevice.ID, group.WorkspaceID, PushOperation{
+		OperationID: uuid.New(), EntityType: "task", EntityID: taskID, BaseVersion: created.Version,
+		Changes: map[string]json.RawMessage{"shared_at": json.RawMessage(fmt.Sprintf("%q", time.Now().UTC().Format(time.RFC3339Nano)))},
+	})
+	if err != nil || bypass.Status != "rejected" || bypass.Code != "COLLABORATION_DISABLED" {
+		t.Fatalf("omitted changed_fields must not bypass collaboration: result=%#v err=%v", bypass, err)
+	}
+	if err := database.SetCollaborationEnabled(ctx, owner.ID, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	sharedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	shared, err := database.ApplyWorkspaceOperation(ctx, owner.ID, ownerDevice.ID, group.WorkspaceID, PushOperation{
+		OperationID: uuid.New(), EntityType: "task", EntityID: taskID, BaseVersion: created.Version,
+		Changes: map[string]json.RawMessage{"shared_at": json.RawMessage(fmt.Sprintf("%q", sharedAt))}, ChangedFields: []string{"shared_at"},
+	})
+	if err != nil || shared.Status != "applied" {
+		t.Fatalf("explicit sharing failed: result=%#v err=%v", shared, err)
+	}
+	memberSnapshot, err = database.WorkspaceSnapshot(ctx, group.WorkspaceID, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memberSnapshot.Tasks) != 1 {
+		t.Fatalf("shared task should be visible: %#v", memberSnapshot.Tasks)
+	}
+	updated, err := database.ApplyWorkspaceOperation(ctx, member.ID, memberDevice.ID, group.WorkspaceID, PushOperation{
+		OperationID: uuid.New(), EntityType: "task", EntityID: taskID, BaseVersion: shared.Version,
+		Changes: map[string]json.RawMessage{"title": json.RawMessage(`"collaborative task"`)}, ChangedFields: []string{"title"},
+	})
+	if err != nil || updated.Status != "applied" {
+		t.Fatalf("shared task should accept member edits: result=%#v err=%v", updated, err)
+	}
+	_, err = database.ApplyWorkspaceOperation(ctx, owner.ID, ownerDevice.ID, group.WorkspaceID, PushOperation{
+		OperationID: uuid.New(), EntityType: "task", EntityID: taskID, BaseVersion: updated.Version,
+		Changes: map[string]json.RawMessage{"shared_at": json.RawMessage(`null`)}, ChangedFields: []string{"shared_at"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberSnapshot, err = database.WorkspaceSnapshot(ctx, group.WorkspaceID, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memberSnapshot.Tasks) != 0 {
+		t.Fatalf("unshared task should no longer be visible: %#v", memberSnapshot.Tasks)
+	}
+	changes, _, _, _, err := database.WorkspaceChanges(ctx, group.WorkspaceID, 0, 20, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastTaskChange := SyncChange{}
+	for _, change := range changes {
+		if change.EntityID == taskID {
+			lastTaskChange = change
+		}
+	}
+	if !lastTaskChange.Deleted || len(lastTaskChange.Entity) != 0 {
+		t.Fatalf("unshared task should produce a viewer tombstone: %#v", lastTaskChange)
 	}
 }
 

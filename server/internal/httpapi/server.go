@@ -77,10 +77,13 @@ func NewWithRedis(
 		admin.Put("/users/{user_id}/disabled", api.adminSetUserDisabled)
 		admin.Put("/users/{user_id}/super-admin", api.adminSetSuperAdmin)
 		admin.Get("/groups", api.adminGroups)
+		admin.Post("/groups", api.adminCreateGroup)
 		admin.Get("/groups/{group_id}/accounts", api.adminGroupAccounts)
 		admin.Post("/groups/{group_id}/accounts", api.adminCreateGroupAccount)
 		admin.Put("/groups/{group_id}/accounts/{account_id}/role", api.adminSetAccountRole)
 		admin.Post("/groups/{group_id}/accounts/{account_id}/bind", api.adminBindAccount)
+		admin.Post("/groups/{group_id}/accounts/{account_id}/unbind", api.adminUnbindAccount)
+		admin.Post("/groups/{group_id}/collaboration", api.adminEnableCollaboration)
 	})
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Post("/auth/login", api.login)

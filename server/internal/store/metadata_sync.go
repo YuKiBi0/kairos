@@ -69,6 +69,13 @@ func (s *Store) applyBlockerOperation(
 			UpdatedAt:     now,
 		}
 	} else {
+		visible, err := s.taskVisibleForUserTx(ctx, tx, userID, workspaceID, current.TaskID)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		if !visible {
+			return OperationResult{}, operationRejection{"FORBIDDEN_SCOPE", "blocker belongs to a private task"}
+		}
 		current.FieldVersions = make(map[string]int64)
 		if err := json.Unmarshal(fieldVersions, &current.FieldVersions); err != nil {
 			return OperationResult{}, err
@@ -152,6 +159,13 @@ func (s *Store) applyBlockerOperation(
 	}
 	if !taskExists {
 		return OperationResult{}, operationRejection{"INVALID_TASK", "blocker task does not exist"}
+	}
+	visible, err := s.taskVisibleForUserTx(ctx, tx, userID, workspaceID, current.TaskID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if !visible {
+		return OperationResult{}, operationRejection{"FORBIDDEN_SCOPE", "blocker belongs to a private task"}
 	}
 	current.Version++
 	current.UpdatedAt = time.Now().UTC()

@@ -16,8 +16,16 @@
     <section id="app-panel" class="hidden">
       <div class="summary"><div><span class="label">当前管理员</span><strong id="identity"></strong></div><div><span class="label">角色</span><strong id="role"></strong></div></div>
       <nav class="tabs"><button data-tab="groups" class="active">群组与花名册</button><button data-tab="users" id="users-tab">服务器账号</button></nav>
-      <section id="groups-view" class="view"><div class="view-head"><div><p class="eyebrow">GROUPS</p><h2>群组目录</h2></div><button id="refresh-groups" class="quiet">刷新</button></div><div id="groups" class="list"></div><p id="group-error" class="error"></p></section>
-      <section id="users-view" class="view hidden"><div class="view-head"><div><p class="eyebrow">DIRECTORY</p><h2>服务器账号</h2></div><button id="refresh-users" class="quiet">刷新</button></div><div id="users" class="list"></div><p id="user-error" class="error"></p></section>
+      <section id="groups-view" class="view">
+        <div class="view-head"><div><p class="eyebrow">GROUPS</p><h2>群组目录</h2></div><button id="refresh-groups" class="quiet">刷新</button></div>
+        <form id="create-group-form" class="action-form"><label>群组名称<input name="name" maxlength="100" required></label><button type="submit">创建群组</button></form>
+        <p id="group-error" class="error" role="alert"></p><div id="groups" class="list"></div>
+      </section>
+      <section id="users-view" class="view hidden">
+        <div class="view-head"><div><p class="eyebrow">DIRECTORY</p><h2>服务器账号</h2></div><button id="refresh-users" class="quiet">刷新</button></div>
+        <form id="create-user-form" class="action-form"><label>账号名<input name="username" maxlength="100" autocomplete="off" required></label><label>初始密码<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">创建账号</button></form>
+        <p id="user-error" class="error" role="alert"></p><div id="users" class="list"></div>
+      </section>
     </section>
   </main>
   <script src="/KairosAdmin/assets/app.js" defer></script>

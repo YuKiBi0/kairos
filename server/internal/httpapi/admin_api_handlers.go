@@ -43,6 +43,19 @@ func (a *API) adminGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
 }
 
+func (a *API) adminCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var request createGroupRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	group, account, _, err := a.store.CreateGroup(r.Context(), adminUserID(r), request.Name)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "无法创建群组")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"group": group, "group_account": account})
+}
+
 func (a *API) adminGroupAccounts(w http.ResponseWriter, r *http.Request) {
 	groupID, err := uuid.Parse(chi.URLParam(r, "group_id"))
 	if err != nil {
@@ -134,6 +147,37 @@ func (a *API) adminBindAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"link": link})
+}
+
+func (a *API) adminUnbindAccount(w http.ResponseWriter, r *http.Request) {
+	groupID, accountID, ok := adminGroupAccountParams(w, r)
+	if !ok {
+		return
+	}
+	var request struct {
+		Reason string `json:"reason"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if err := a.store.UnbindGroupAccount(r.Context(), adminUserID(r), groupID, accountID, request.Reason); err != nil {
+		handleGroupError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) adminEnableCollaboration(w http.ResponseWriter, r *http.Request) {
+	groupID, err := uuid.Parse(chi.URLParam(r, "group_id"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "群组 ID 无效")
+		return
+	}
+	if err := a.store.SetCollaborationEnabled(r.Context(), adminUserID(r), groupID); err != nil {
+		handleGroupError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) adminCreateUser(w http.ResponseWriter, r *http.Request) {

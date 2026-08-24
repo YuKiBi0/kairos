@@ -19,6 +19,12 @@ type AdminUser struct {
 	Role       string     `json:"role"`
 }
 
+type AdminGroupAccount struct {
+	GroupAccount
+	BoundUserID *uuid.UUID `json:"bound_user_id,omitempty"`
+	Username    *string    `json:"username,omitempty"`
+}
+
 func (s *Store) AdminRole(ctx context.Context, userID uuid.UUID) (string, error) {
 	var role string
 	err := s.pool.QueryRow(ctx, `
@@ -88,7 +94,7 @@ func (s *Store) AdminGroups(ctx context.Context, userID uuid.UUID, role string) 
 	return groups, rows.Err()
 }
 
-func (s *Store) AdminGroupAccounts(ctx context.Context, actorID, groupID uuid.UUID, role string) ([]GroupAccount, error) {
+func (s *Store) AdminGroupAccounts(ctx context.Context, actorID, groupID uuid.UUID, role string) ([]AdminGroupAccount, error) {
 	if role != "L3" {
 		var allowed bool
 		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(
@@ -101,7 +107,31 @@ func (s *Store) AdminGroupAccounts(ctx context.Context, actorID, groupID uuid.UU
 			return nil, ErrAdminForbidden
 		}
 	}
-	return s.ListGroupAccounts(ctx, groupID)
+	rows, err := s.pool.Query(ctx, `
+		SELECT account.id, account.group_id, account.account_code, account.display_name,
+		       account.role, account.active, account.created_at, link.user_id, users.username
+		FROM group_accounts account
+		LEFT JOIN group_account_links link ON link.group_account_id=account.id AND link.unbound_at IS NULL
+		LEFT JOIN users ON users.id=link.user_id
+		WHERE account.group_id=$1
+		ORDER BY account.account_code, account.id`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	accounts := make([]AdminGroupAccount, 0)
+	for rows.Next() {
+		var account AdminGroupAccount
+		if err := rows.Scan(
+			&account.ID, &account.GroupID, &account.AccountCode, &account.DisplayName,
+			&account.Role, &account.Active, &account.CreatedAt,
+			&account.BoundUserID, &account.Username,
+		); err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, rows.Err()
 }
 
 func (s *Store) AdminUserByID(ctx context.Context, userID uuid.UUID) (AdminUser, error) {

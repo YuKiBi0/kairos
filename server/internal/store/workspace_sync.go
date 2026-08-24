@@ -12,6 +12,29 @@ import (
 
 var ErrWorkspaceForbidden = errors.New("workspace operation forbidden")
 
+func (s *Store) taskVisibleForUserTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID, workspaceID, taskID uuid.UUID,
+) (bool, error) {
+	var visible bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM tasks task_row
+			JOIN workspaces workspace ON workspace.id = task_row.workspace_id
+			LEFT JOIN groups group_row ON group_row.id = workspace.group_id
+			WHERE task_row.workspace_id=$1 AND task_row.id=$2
+			  AND (
+				 task_row.user_id=$3
+				 OR task_row.shared_at IS NOT NULL
+				 OR EXISTS(SELECT 1 FROM server_roles role
+				           WHERE role.user_id=$3 AND role.role='L3' AND role.active)
+			  )
+		)`, workspaceID, taskID, userID).Scan(&visible)
+	return visible, err
+}
+
 func (s *Store) WorkspaceForUser(ctx context.Context, userID, workspaceID uuid.UUID) (Workspace, error) {
 	var workspace Workspace
 	err := s.pool.QueryRow(ctx, `
@@ -39,13 +62,17 @@ func (s *Store) WorkspaceForUser(ctx context.Context, userID, workspaceID uuid.U
 	return workspace, nil
 }
 
-func (s *Store) WorkspaceSnapshot(ctx context.Context, workspaceID uuid.UUID) (Snapshot, error) {
+func (s *Store) WorkspaceSnapshot(ctx context.Context, workspaceID uuid.UUID, viewerIDs ...uuid.UUID) (Snapshot, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return Snapshot{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	snapshot := Snapshot{}
+	viewerID := uuid.Nil
+	if len(viewerIDs) > 0 {
+		viewerID = viewerIDs[0]
+	}
 	snapshot.Tasks, err = queryJSONList(ctx, tx, `
 		SELECT (to_jsonb(task_row) - 'user_id' - 'workspace_id' - 'field_versions') ||
 			jsonb_build_object('tag_ids', COALESCE((
@@ -53,14 +80,24 @@ func (s *Store) WorkspaceSnapshot(ctx context.Context, workspaceID uuid.UUID) (S
 				WHERE workspace_id = $1 AND task_id = task_row.id
 			), '[]'::jsonb))
 		FROM tasks task_row WHERE workspace_id = $1 AND deleted_at IS NULL
-		ORDER BY parent_id NULLS FIRST, sort_order, id`, workspaceID)
+		  AND ($2 = $3::uuid OR task_row.user_id = $2 OR task_row.shared_at IS NOT NULL OR EXISTS(
+			SELECT 1 FROM server_roles role WHERE role.user_id=$2 AND role.role='L3' AND role.active
+		  ))
+		ORDER BY parent_id NULLS FIRST, sort_order, id`, workspaceID, viewerID, uuid.Nil)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	snapshot.Blockers, err = queryJSONList(ctx, tx, `
 		SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
 		FROM blockers entity_row WHERE workspace_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at, id`, workspaceID)
+		  AND ($2 = $3::uuid OR EXISTS(
+			SELECT 1 FROM tasks task_row
+			WHERE task_row.workspace_id=$1 AND task_row.id=entity_row.task_id
+			  AND (task_row.user_id=$2 OR task_row.shared_at IS NOT NULL OR EXISTS(
+				SELECT 1 FROM server_roles role WHERE role.user_id=$2 AND role.role='L3' AND role.active
+			  ))
+		  ))
+		ORDER BY created_at, id`, workspaceID, viewerID, uuid.Nil)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -91,9 +128,13 @@ func (s *Store) WorkspaceSnapshot(ctx context.Context, workspaceID uuid.UUID) (S
 	return snapshot, nil
 }
 
-func (s *Store) WorkspaceChanges(ctx context.Context, workspaceID uuid.UUID, after int64, limit int) ([]SyncChange, int64, int64, bool, error) {
+func (s *Store) WorkspaceChanges(ctx context.Context, workspaceID uuid.UUID, after int64, limit int, viewerIDs ...uuid.UUID) ([]SyncChange, int64, int64, bool, error) {
 	if limit < 1 || limit > 200 {
 		return nil, after, 0, false, fmt.Errorf("limit must be between 1 and 200")
+	}
+	viewerID := uuid.Nil
+	if len(viewerIDs) > 0 {
+		viewerID = viewerIDs[0]
 	}
 	var serverCursor int64
 	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE workspace_id = $1`, workspaceID).Scan(&serverCursor); err != nil {
@@ -103,9 +144,44 @@ func (s *Store) WorkspaceChanges(ctx context.Context, workspaceID uuid.UUID, aft
 		return []SyncChange{}, after, serverCursor, false, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT cursor, entity_type, entity_id, entity_version, deleted, entity
+		SELECT cursor, entity_type, entity_id, entity_version,
+		       CASE WHEN $4 = $5::uuid THEN deleted
+		            WHEN entity_type = 'task' AND NOT EXISTS(
+		              SELECT 1 FROM tasks task_row
+		              WHERE task_row.workspace_id=$1 AND task_row.id=sync_changes.entity_id
+		                AND (task_row.user_id=$4 OR task_row.shared_at IS NOT NULL OR EXISTS(
+		                  SELECT 1 FROM server_roles role WHERE role.user_id=$4 AND role.role='L3' AND role.active
+		                ))
+		            ) THEN true
+		            WHEN entity_type = 'blocker' AND NOT EXISTS(
+		              SELECT 1 FROM blockers blocker_row
+		              JOIN tasks task_row ON task_row.workspace_id=blocker_row.workspace_id AND task_row.id=blocker_row.task_id
+		              WHERE blocker_row.workspace_id=$1 AND blocker_row.id=sync_changes.entity_id
+		                AND (task_row.user_id=$4 OR task_row.shared_at IS NOT NULL OR EXISTS(
+		                  SELECT 1 FROM server_roles role WHERE role.user_id=$4 AND role.role='L3' AND role.active
+		                ))
+		            ) THEN true
+		            ELSE deleted END AS deleted,
+		       CASE WHEN $4 = $5::uuid THEN entity
+		            WHEN entity_type IN ('task', 'blocker') AND (
+		              (entity_type='task' AND NOT EXISTS(
+		                SELECT 1 FROM tasks task_row
+		                WHERE task_row.workspace_id=$1 AND task_row.id=sync_changes.entity_id
+		                  AND (task_row.user_id=$4 OR task_row.shared_at IS NOT NULL OR EXISTS(
+		                    SELECT 1 FROM server_roles role WHERE role.user_id=$4 AND role.role='L3' AND role.active
+		                  ))
+		              )) OR
+		              (entity_type='blocker' AND NOT EXISTS(
+		                SELECT 1 FROM blockers blocker_row
+		                JOIN tasks task_row ON task_row.workspace_id=blocker_row.workspace_id AND task_row.id=blocker_row.task_id
+		                WHERE blocker_row.workspace_id=$1 AND blocker_row.id=sync_changes.entity_id
+		                  AND (task_row.user_id=$4 OR task_row.shared_at IS NOT NULL OR EXISTS(
+		                    SELECT 1 FROM server_roles role WHERE role.user_id=$4 AND role.role='L3' AND role.active
+		                  ))
+		              ))
+		            ) THEN NULL ELSE entity END AS entity
 		FROM sync_changes WHERE workspace_id = $1 AND cursor > $2
-		ORDER BY cursor LIMIT $3`, workspaceID, after, limit+1)
+		ORDER BY cursor LIMIT $3`, workspaceID, after, limit+1, viewerID, uuid.Nil)
 	if err != nil {
 		return nil, after, serverCursor, false, err
 	}

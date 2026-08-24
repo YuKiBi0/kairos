@@ -69,7 +69,7 @@ func TestInviteExpiryTargetBindingAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redemption.GroupAccountID != target.ID || targeted.UseCount != 0 {
+	if redemption.GroupID != group.ID || redemption.GroupAccountID != target.ID || targeted.UseCount != 0 {
 		t.Fatalf("targeted invite returned unexpected result: %#v", redemption)
 	}
 	secondKey := uuid.New()
@@ -95,7 +95,7 @@ func TestInviteExpiryTargetBindingAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.ID != retry.ID || ordinary.UseCount != 0 {
+	if first.ID != retry.ID || first.GroupID != group.ID || retry.GroupID != group.ID || ordinary.UseCount != 0 {
 		t.Fatalf("idempotent redemption changed result: first=%#v retry=%#v", first, retry)
 	}
 

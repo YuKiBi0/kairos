@@ -14,6 +14,8 @@
 | GET | /workspaces/{workspace_id}/sync/status | 服务端游标状态 |
 | GET | /realtime | WebSocket 通知，消息包含 workspace_id，不包含任务正文 |
 
+群组任务默认只对创建者可见。群组管理员开启协作后，任务所有者（或群组管理员）可通过同步操作写入 `shared_at` 时间戳显式共享；将其写回 `null` 会撤销共享。未共享任务对其他成员的快照和增量接口返回不可见/删除标记，成员不能写入。个人工作空间不接受 `shared_at`。
+
 ## 群组和花名册
 
 | 方法 | 路径 | 最低角色 |

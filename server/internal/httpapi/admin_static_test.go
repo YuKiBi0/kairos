@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/YuKiBi0/kairos/server/internal/config"
@@ -40,5 +41,33 @@ func TestKairosAdminStaticEntryAndSecurityHeaders(t *testing.T) {
 	unauthorized.Body.Close()
 	if unauthorized.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated admin API should be 401, got %d", unauthorized.StatusCode)
+	}
+}
+
+func TestKairosAdminIncludesResourceManagementControls(t *testing.T) {
+	handler := New(nil, config.Config{SessionSecret: []byte("01234567890123456789012345678901")}, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	for _, path := range []string{"/KairosAdmin/", "/KairosAdmin/assets/app.js"} {
+		response, err := server.Client().Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("admin asset %s unavailable: status=%d err=%v", path, response.StatusCode, err)
+		}
+		content := string(body)
+		for _, expected := range []string{"create-group-form", "create-user-form"} {
+			if path == "/KairosAdmin/" && !strings.Contains(content, expected) {
+				t.Fatalf("admin page missing %s", expected)
+			}
+		}
+		for _, expected := range []string{"/collaboration", "/unbind", "/super-admin", "/disabled"} {
+			if path != "/KairosAdmin/" && !strings.Contains(content, expected) {
+				t.Fatalf("admin script missing management action %s", expected)
+			}
+		}
 	}
 }

@@ -34,6 +34,7 @@ type GroupInvite struct {
 type GroupInviteRedemption struct {
 	ID             uuid.UUID `json:"id"`
 	InviteID       uuid.UUID `json:"invite_id"`
+	GroupID        uuid.UUID `json:"group_id"`
 	UserID         uuid.UUID `json:"user_id"`
 	GroupAccountID uuid.UUID `json:"group_account_id"`
 	IdempotencyKey uuid.UUID `json:"idempotency_key"`
@@ -189,6 +190,7 @@ func (s *Store) RedeemGroupInvite(ctx context.Context, userID uuid.UUID, digest 
 		WHERE invite_id = $1 AND user_id = $2 AND idempotency_key = $3`, invite.ID, userID, idempotencyKey,
 	).Scan(&existing.ID, &existing.InviteID, &existing.UserID, &existing.GroupAccountID, &existing.IdempotencyKey, &existing.RedeemedAt)
 	if err == nil {
+		existing.GroupID = invite.GroupID
 		if err := tx.Commit(ctx); err != nil {
 			return GroupInviteRedemption{}, err
 		}
@@ -256,7 +258,7 @@ func (s *Store) RedeemGroupInvite(ctx context.Context, userID uuid.UUID, digest 
 		}
 		return GroupInviteRedemption{}, err
 	}
-	redemption := GroupInviteRedemption{ID: uuid.New(), InviteID: invite.ID, UserID: userID, GroupAccountID: accountID, IdempotencyKey: idempotencyKey}
+	redemption := GroupInviteRedemption{ID: uuid.New(), InviteID: invite.ID, GroupID: invite.GroupID, UserID: userID, GroupAccountID: accountID, IdempotencyKey: idempotencyKey}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO group_invite_redemptions(id, invite_id, user_id, group_account_id, idempotency_key)
 		VALUES($1, $2, $3, $4, $5)

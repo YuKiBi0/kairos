@@ -124,6 +124,7 @@ func (s *Store) ApplyWorkspaceOperation(
 
 type taskRecord struct {
 	ID               uuid.UUID
+	OwnerUserID      uuid.UUID
 	ParentID         *uuid.UUID
 	Title            string
 	Description      *string
@@ -140,6 +141,7 @@ type taskRecord struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	CompletedAt      *time.Time
+	SharedAt         *time.Time
 	UpdatedByDevice  uuid.UUID
 	TagIDs           []uuid.UUID
 }
@@ -153,6 +155,7 @@ func scanTask(row rowScanner) (taskRecord, error) {
 	var fieldVersions []byte
 	err := row.Scan(
 		&task.ID,
+		&task.OwnerUserID,
 		&task.ParentID,
 		&task.Title,
 		&task.Description,
@@ -169,6 +172,7 @@ func scanTask(row rowScanner) (taskRecord, error) {
 		&task.CreatedAt,
 		&task.UpdatedAt,
 		&task.CompletedAt,
+		&task.SharedAt,
 		&task.UpdatedByDevice,
 	)
 	if err != nil {
@@ -189,10 +193,10 @@ func (s *Store) applyTaskOperation(
 ) (OperationResult, error) {
 	current, err := scanTask(tx.QueryRow(
 		ctx,
-		`SELECT id, parent_id, title, description, quadrant, status, due_at,
+		`SELECT id, user_id, parent_id, title, description, quadrant, status, due_at,
 		        depth, sort_order, project_id, checklist_group_id, version,
 		        field_versions, deleted_at, created_at, updated_at, completed_at,
-		        updated_by_device_id
+		        shared_at, updated_by_device_id
 		 FROM tasks
 			 WHERE workspace_id = $1 AND id = $2
 			 FOR UPDATE`,
@@ -210,6 +214,7 @@ func (s *Store) applyTaskOperation(
 		now := time.Now().UTC()
 		current = taskRecord{
 			ID:              operation.EntityID,
+			OwnerUserID:     userID,
 			Quadrant:        2,
 			Status:          0,
 			Depth:           1,
@@ -219,7 +224,13 @@ func (s *Store) applyTaskOperation(
 			UpdatedAt:       now,
 			UpdatedByDevice: deviceID,
 		}
+		if err := s.authorizeTaskOperation(ctx, tx, userID, workspaceID, current, operation, true); err != nil {
+			return OperationResult{}, err
+		}
 	} else {
+		if err := s.authorizeTaskOperation(ctx, tx, userID, workspaceID, current, operation, false); err != nil {
+			return OperationResult{}, err
+		}
 		entity, err := s.taskJSON(ctx, tx, workspaceID, current.ID)
 		if err != nil {
 			return OperationResult{}, err
@@ -237,7 +248,6 @@ func (s *Store) applyTaskOperation(
 			}, nil
 		}
 	}
-
 	changedFields := normalizedChangedFields(operation)
 	if creating && len(changedFields) == 0 {
 		return OperationResult{}, operationRejection{"VALIDATION_ERROR", "task changes are required"}
@@ -259,6 +269,15 @@ func (s *Store) applyTaskOperation(
 	}
 	if err := s.validateOwnedReference(ctx, tx, "checklist_groups", workspaceID, current.ChecklistGroupID); err != nil {
 		return OperationResult{}, err
+	}
+	if current.ParentID != nil {
+		visible, err := s.taskVisibleForUserTx(ctx, tx, userID, workspaceID, *current.ParentID)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		if !visible {
+			return OperationResult{}, operationRejection{"INVALID_PARENT", "parent task is not visible to this member"}
+		}
 	}
 
 	nodes, err := s.taskNodes(ctx, tx, workspaceID)
@@ -311,15 +330,15 @@ func (s *Store) applyTaskOperation(
 			   id, user_id, workspace_id, parent_id, title, description, quadrant, status,
 			   due_at, depth, sort_order, project_id, checklist_group_id,
 			   version, field_versions, deleted_at, created_at, updated_at,
-			   completed_at, updated_by_device_id
+			   completed_at, shared_at, updated_by_device_id
 			 ) VALUES(
-			   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+			   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
 			 )`,
 			current.ID, userID, workspaceID, current.ParentID, current.Title, current.Description,
 			current.Quadrant, current.Status, current.DueAt, current.Depth,
 			current.SortOrder, current.ProjectID, current.ChecklistGroupID,
 			current.Version, fieldVersions, current.DeletedAt, current.CreatedAt,
-			current.UpdatedAt, current.CompletedAt, current.UpdatedByDevice,
+			current.UpdatedAt, current.CompletedAt, current.SharedAt, current.UpdatedByDevice,
 		)
 	} else {
 		_, err = tx.Exec(
@@ -329,13 +348,13 @@ func (s *Store) applyTaskOperation(
 			   due_at=$8, depth=$9, sort_order=$10, project_id=$11,
 			   checklist_group_id=$12, version=$13, field_versions=$14,
 			   deleted_at=$15, updated_at=$16, completed_at=$17,
-			   updated_by_device_id=$18
+			   shared_at=$18, updated_by_device_id=$19
 				 WHERE workspace_id=$1 AND id=$2`,
 			workspaceID, current.ID, current.ParentID, current.Title, current.Description,
 			current.Quadrant, current.Status, current.DueAt, current.Depth,
 			current.SortOrder, current.ProjectID, current.ChecklistGroupID,
 			current.Version, fieldVersions, current.DeletedAt, current.UpdatedAt,
-			current.CompletedAt, current.UpdatedByDevice,
+			current.CompletedAt, current.SharedAt, current.UpdatedByDevice,
 		)
 	}
 	if err != nil {
@@ -378,6 +397,89 @@ func (s *Store) applyTaskOperation(
 		Cursor:       cursor,
 		ServerEntity: entity,
 	}, nil
+}
+
+// authorizeTaskOperation keeps group task visibility and mutation scoped to
+// the task owner until the owner explicitly shares it after collaboration is
+// enabled. L3 retains server-wide access, while L1/L2 members can collaborate
+// only on shared tasks.
+func (s *Store) authorizeTaskOperation(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID, workspaceID uuid.UUID,
+	current taskRecord,
+	operation PushOperation,
+	creating bool,
+) error {
+	var kind string
+	var groupID *uuid.UUID
+	var collaborationEnabledAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT workspace.kind, workspace.group_id, group_row.collaboration_enabled_at
+		FROM workspaces workspace
+		LEFT JOIN groups group_row ON group_row.id = workspace.group_id
+		WHERE workspace.id = $1`, workspaceID,
+	).Scan(&kind, &groupID, &collaborationEnabledAt); err != nil {
+		return err
+	}
+
+	if kind == "personal" {
+		if !creating && current.OwnerUserID != userID {
+			return operationRejection{"FORBIDDEN_SCOPE", "only the task owner can modify a personal task"}
+		}
+		if current.SharedAt != nil || contains(operation.ChangedFields, "shared_at") {
+			return operationRejection{"VALIDATION_ERROR", "personal tasks cannot be shared"}
+		}
+		return nil
+	}
+	if groupID == nil {
+		return operationRejection{"FORBIDDEN_SCOPE", "workspace group is missing"}
+	}
+
+	var role string
+	if err := tx.QueryRow(ctx, `
+		SELECT CASE
+			WHEN EXISTS(SELECT 1 FROM server_roles WHERE user_id=$1 AND role='L3' AND active) THEN 'L3'
+			ELSE COALESCE((
+				SELECT account.role
+				FROM group_account_links link
+				JOIN group_accounts account ON account.id=link.group_account_id
+				WHERE link.user_id=$1 AND link.group_id=$2 AND link.unbound_at IS NULL AND account.active
+			), '')
+		END`, userID, *groupID).Scan(&role); err != nil {
+		return err
+	}
+	if role == "" {
+		return operationRejection{"FORBIDDEN_SCOPE", "user is not an active group member"}
+	}
+
+	owner := creating || current.OwnerUserID == userID
+	manager := role == "L2" || role == "L3"
+	changedFields := normalizedChangedFields(operation)
+	if !creating && !owner && current.SharedAt == nil {
+		sharingOnly := contains(changedFields, "shared_at") && len(changedFields) == 1
+		if role != "L3" && !(manager && sharingOnly) {
+			return operationRejection{"FORBIDDEN_SCOPE", "task is not shared with this group member"}
+		}
+	}
+	if contains(changedFields, "shared_at") {
+		if !owner && !manager {
+			return operationRejection{"FORBIDDEN_SCOPE", "only the owner or a group manager can change sharing"}
+		}
+		var target *time.Time
+		if raw, ok := operation.Changes["shared_at"]; ok {
+			if err := decodeTime(raw, &target); err != nil {
+				return operationRejection{"VALIDATION_ERROR", "shared_at must be an RFC3339 time or null"}
+			}
+		}
+		if target != nil && collaborationEnabledAt == nil {
+			return operationRejection{"COLLABORATION_DISABLED", "group collaboration must be enabled before sharing tasks"}
+		}
+	}
+	if current.SharedAt != nil && collaborationEnabledAt == nil {
+		return operationRejection{"COLLABORATION_DISABLED", "group collaboration is disabled"}
+	}
+	return nil
 }
 
 func conflictingFields(
@@ -456,6 +558,8 @@ func applyTaskField(task *taskRecord, field string, raw json.RawMessage) error {
 		return nil
 	case "completed_at":
 		return decodeTime(raw, &task.CompletedAt)
+	case "shared_at":
+		return decodeTime(raw, &task.SharedAt)
 	case "tag_ids":
 		var values []string
 		if err := json.Unmarshal(raw, &values); err != nil {
