@@ -3,6 +3,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -77,6 +78,10 @@ func TestWorkspaceSyncRoutesEnforceScope(t *testing.T) {
 	status, _ = requestAPI(t, http.MethodGet, server.URL+"/api/v2/workspaces/"+group.WorkspaceID.String()+"/sync/snapshot", otherToken, nil)
 	if status != http.StatusForbidden {
 		t.Fatalf("cross-user group snapshot should be forbidden: %d", status)
+	}
+	status, body := requestAPI(t, http.MethodGet, server.URL+"/api/v2/workspaces", ownerToken, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"display_name":"个人任务"`)) {
+		t.Fatalf("workspace catalog should include display name: status=%d body=%s", status, body)
 	}
 }
 
