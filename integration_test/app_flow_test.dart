@@ -23,6 +23,7 @@ void main() {
     Widget application() => ProviderScope(
       overrides: <Override>[
         databaseProvider.overrideWithValue(database),
+        workspaceDatabaseProvider.overrideWithValue(database),
         credentialStoreProvider.overrideWithValue(_MemoryCredentialStore()),
         networkMonitorProvider.overrideWithValue(const _OnlineNetworkMonitor()),
       ],

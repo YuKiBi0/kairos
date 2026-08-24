@@ -235,6 +235,13 @@ class RealtimeController implements RealtimeActions {
     await connect(manual: true);
   }
 
+  Future<void> workspaceChanged() async {
+    await reconnect();
+    if (!_disposed) {
+      unawaited(synchronizeNow());
+    }
+  }
+
   @override
   Future<void> synchronizeNow() async {
     _syncRequested = true;

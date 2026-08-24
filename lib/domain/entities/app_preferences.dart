@@ -8,6 +8,7 @@ enum TaskScope { all, today, overdue, completed }
 
 class AppPreferences {
   const AppPreferences({
+    this.workspaceId = 'personal',
     this.viewMode = TaskViewMode.list,
     this.sortMode = TaskSortMode.executionPriority,
     this.scope = TaskScope.all,
@@ -24,6 +25,7 @@ class AppPreferences {
   });
 
   final TaskViewMode viewMode;
+  final String workspaceId;
   final TaskSortMode sortMode;
   final TaskScope scope;
   final String searchText;
@@ -38,6 +40,7 @@ class AppPreferences {
   final String? checklistGroupId;
 
   AppPreferences copyWith({
+    String? workspaceId,
     TaskViewMode? viewMode,
     TaskSortMode? sortMode,
     TaskScope? scope,
@@ -52,6 +55,7 @@ class AppPreferences {
     Object? projectId = _unsetPreference,
     Object? checklistGroupId = _unsetPreference,
   }) => AppPreferences(
+    workspaceId: workspaceId ?? this.workspaceId,
     viewMode: viewMode ?? this.viewMode,
     sortMode: sortMode ?? this.sortMode,
     scope: scope ?? this.scope,

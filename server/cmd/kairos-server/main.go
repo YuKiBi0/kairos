@@ -20,6 +20,7 @@ import (
 	"github.com/YuKiBi0/kairos/server/internal/config"
 	"github.com/YuKiBi0/kairos/server/internal/envfile"
 	"github.com/YuKiBi0/kairos/server/internal/httpapi"
+	redisclient "github.com/YuKiBi0/kairos/server/internal/redis"
 	"github.com/YuKiBi0/kairos/server/internal/store"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -40,7 +41,7 @@ func run(arguments []string) error {
 	flags.SetOutput(io.Discard)
 	envPath := flags.String("env-file", "", "path to a dotenv environment file")
 	if err := flags.Parse(arguments); err != nil {
-		return fmt.Errorf("usage: kairos-server [--env-file PATH] [serve|migrate|create-user|version]: %w", err)
+		return fmt.Errorf("usage: kairos-server [--env-file PATH] [serve|migrate|create-user|bootstrap-super-admin|version]: %w", err)
 	}
 	arguments = flags.Args()
 	if *envPath != "" {
@@ -76,6 +77,15 @@ func run(arguments []string) error {
 			username = arguments[1]
 		}
 		return createUser(cfg, username)
+	case "bootstrap-super-admin":
+		if len(arguments) > 2 {
+			return errors.New("usage: kairos-server [--env-file PATH] bootstrap-super-admin [username]")
+		}
+		username := cfg.BootstrapUsername
+		if len(arguments) == 2 {
+			username = arguments[1]
+		}
+		return bootstrapSuperAdmin(cfg, username)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -100,10 +110,21 @@ func serve(cfg config.Config, logger *slog.Logger) error {
 	if err := database.Ping(ctx); err != nil {
 		return fmt.Errorf("database readiness check: %w", err)
 	}
+	redis, err := redisclient.New(cfg.RedisURL, cfg.RedisDialTimeout, cfg.RedisCommandTimeout)
+	if err != nil {
+		return err
+	}
+	defer redis.Close()
+	if err := redis.Ping(ctx); err != nil {
+		if cfg.RedisRequired {
+			return fmt.Errorf("redis readiness check: %w", err)
+		}
+		logger.Warn("redis_unavailable", "error", err)
+	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.New(database, cfg, logger, version),
+		Handler:           httpapi.NewWithRedis(database, cfg, logger, version, redis),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -172,6 +193,36 @@ func createUser(cfg config.Config, username string) error {
 		return err
 	}
 	fmt.Printf("created user %s (%s)\n", user.Username, user.ID)
+	return nil
+}
+
+func bootstrapSuperAdmin(cfg config.Config, username string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return errors.New("username is required")
+	}
+	if cfg.BootstrapPassword == "" {
+		return errors.New("KAIROS_BOOTSTRAP_PASSWORD is required for bootstrap-super-admin")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	database, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	user, err := database.UserByUsername(ctx, username)
+	if err != nil {
+		return errors.New("bootstrap user not found")
+	}
+	valid, err := auth.VerifyPassword(user.PasswordHash, cfg.BootstrapPassword)
+	if err != nil || !valid {
+		return errors.New("bootstrap password does not match the account password")
+	}
+	if err := database.BootstrapSuperAdmin(ctx, user.ID); err != nil {
+		return err
+	}
+	fmt.Printf("bootstrapped super administrator %s (%s)\n", user.Username, user.ID)
 	return nil
 }
 

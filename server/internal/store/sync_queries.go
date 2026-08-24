@@ -10,6 +10,10 @@ import (
 )
 
 func (s *Store) Snapshot(ctx context.Context, userID uuid.UUID) (Snapshot, error) {
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return Snapshot{}, err
@@ -20,17 +24,17 @@ func (s *Store) Snapshot(ctx context.Context, userID uuid.UUID) (Snapshot, error
 	snapshot.Tasks, err = queryJSONList(
 		ctx,
 		tx,
-		`SELECT (to_jsonb(task_row) - 'user_id' - 'field_versions') ||
+		`SELECT (to_jsonb(task_row) - 'user_id' - 'workspace_id' - 'field_versions') ||
 		 jsonb_build_object(
 		   'tag_ids', COALESCE((
 		     SELECT jsonb_agg(tag_id ORDER BY tag_id)
-		     FROM task_tags WHERE user_id=$1 AND task_id=task_row.id
+			   FROM task_tags WHERE workspace_id=$1 AND task_id=task_row.id
 		   ), '[]'::jsonb)
 		 )
 		 FROM tasks task_row
-		 WHERE user_id=$1 AND deleted_at IS NULL
+		 WHERE workspace_id=$1 AND deleted_at IS NULL
 		 ORDER BY parent_id NULLS FIRST, sort_order, id`,
-		userID,
+		workspaceID,
 	)
 	if err != nil {
 		return Snapshot{}, err
@@ -38,11 +42,11 @@ func (s *Store) Snapshot(ctx context.Context, userID uuid.UUID) (Snapshot, error
 	snapshot.Blockers, err = queryJSONList(
 		ctx,
 		tx,
-		`SELECT to_jsonb(entity_row) - 'user_id' - 'field_versions'
+		`SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
 		 FROM blockers entity_row
-		 WHERE user_id=$1 AND deleted_at IS NULL
+		 WHERE workspace_id=$1 AND deleted_at IS NULL
 		 ORDER BY created_at, id`,
-		userID,
+		workspaceID,
 	)
 	if err != nil {
 		return Snapshot{}, err
@@ -50,9 +54,9 @@ func (s *Store) Snapshot(ctx context.Context, userID uuid.UUID) (Snapshot, error
 	snapshot.Tags, err = queryJSONList(
 		ctx,
 		tx,
-		`SELECT to_jsonb(entity_row) - 'user_id' - 'field_versions'
-		 FROM tags entity_row WHERE user_id=$1 ORDER BY name, id`,
-		userID,
+		`SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
+		 FROM tags entity_row WHERE workspace_id=$1 ORDER BY name, id`,
+		workspaceID,
 	)
 	if err != nil {
 		return Snapshot{}, err
@@ -60,9 +64,9 @@ func (s *Store) Snapshot(ctx context.Context, userID uuid.UUID) (Snapshot, error
 	snapshot.Projects, err = queryJSONList(
 		ctx,
 		tx,
-		`SELECT to_jsonb(entity_row) - 'user_id' - 'field_versions'
-		 FROM projects entity_row WHERE user_id=$1 ORDER BY name, id`,
-		userID,
+		`SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
+		 FROM projects entity_row WHERE workspace_id=$1 ORDER BY name, id`,
+		workspaceID,
 	)
 	if err != nil {
 		return Snapshot{}, err
@@ -70,17 +74,17 @@ func (s *Store) Snapshot(ctx context.Context, userID uuid.UUID) (Snapshot, error
 	snapshot.ChecklistGroups, err = queryJSONList(
 		ctx,
 		tx,
-		`SELECT to_jsonb(entity_row) - 'user_id' - 'field_versions'
-		 FROM checklist_groups entity_row WHERE user_id=$1 ORDER BY name, id`,
-		userID,
+		`SELECT to_jsonb(entity_row) - 'user_id' - 'workspace_id' - 'field_versions'
+		 FROM checklist_groups entity_row WHERE workspace_id=$1 ORDER BY name, id`,
+		workspaceID,
 	)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if err := tx.QueryRow(
 		ctx,
-		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE user_id=$1`,
-		userID,
+		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE workspace_id=$1`,
+		workspaceID,
 	).Scan(&snapshot.Cursor); err != nil {
 		return Snapshot{}, err
 	}
@@ -96,6 +100,10 @@ func (s *Store) Changes(
 	after int64,
 	limit int,
 ) ([]SyncChange, int64, int64, bool, error) {
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return nil, after, 0, false, err
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return nil, after, 0, false, err
@@ -105,8 +113,8 @@ func (s *Store) Changes(
 	var serverCursor int64
 	if err := tx.QueryRow(
 		ctx,
-		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE user_id=$1`,
-		userID,
+		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE workspace_id=$1`,
+		workspaceID,
 	).Scan(&serverCursor); err != nil {
 		return nil, after, 0, false, err
 	}
@@ -121,10 +129,10 @@ func (s *Store) Changes(
 		ctx,
 		`SELECT cursor,entity_type,entity_id,entity_version,deleted,entity
 		 FROM sync_changes
-		 WHERE user_id=$1 AND cursor>$2 AND cursor<=$3
+		 WHERE workspace_id=$1 AND cursor>$2 AND cursor<=$3
 		 ORDER BY cursor
 		 LIMIT $4`,
-		userID,
+		workspaceID,
 		after,
 		serverCursor,
 		limit+1,
@@ -171,11 +179,15 @@ func (s *Store) Changes(
 }
 
 func (s *Store) ServerCursor(ctx context.Context, userID uuid.UUID) (int64, error) {
+	workspaceID, err := s.personalWorkspaceID(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
 	var cursor int64
-	err := s.pool.QueryRow(
+	err = s.pool.QueryRow(
 		ctx,
-		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE user_id=$1`,
-		userID,
+		`SELECT COALESCE(MAX(cursor), 0) FROM sync_changes WHERE workspace_id=$1`,
+		workspaceID,
 	).Scan(&cursor)
 	return cursor, err
 }

@@ -69,6 +69,40 @@ class RemoteSession {
   final RemoteDevice device;
 }
 
+class RemoteWorkspace {
+  const RemoteWorkspace({
+    required this.id,
+    required this.kind,
+    required this.displayName,
+    required this.role,
+    this.groupId,
+  });
+
+  factory RemoteWorkspace.fromJson(Map<String, dynamic> json) => switch (json) {
+    {
+      'id': String id,
+      'kind': String kind,
+      'display_name': String displayName,
+      'role': String role,
+    } => RemoteWorkspace(
+      id: id,
+      kind: kind,
+      displayName: displayName,
+      role: role,
+      groupId: json['group_id'] as String?,
+    ),
+    _ => throw const FormatException('Invalid remote workspace.'),
+  };
+
+  final String id;
+  final String kind;
+  final String displayName;
+  final String role;
+  final String? groupId;
+
+  bool get isPersonal => kind == 'personal';
+}
+
 class RemoteChange {
   const RemoteChange({
     required this.cursor,
