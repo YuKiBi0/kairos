@@ -135,6 +135,12 @@ func (s *Store) UserByID(ctx context.Context, userID uuid.UUID) (User, error) {
 	return user, nil
 }
 
+func (s *Store) UserIDByExactUsername(ctx context.Context, username string) (uuid.UUID, error) {
+	var userID uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM users WHERE username = $1 AND disabled_at IS NULL`, username).Scan(&userID)
+	return userID, err
+}
+
 func (s *Store) DeviceByID(
 	ctx context.Context,
 	userID, deviceID uuid.UUID,

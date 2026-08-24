@@ -245,6 +245,8 @@ func handleGroupError(w http.ResponseWriter, r *http.Request, err error) bool {
 		return false
 	}
 	switch {
+	case errors.Is(err, store.ErrAdminForbidden):
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN_SCOPE", "无权管理此资源")
 	case errors.Is(err, store.ErrGroupForbidden):
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN_SCOPE", "无权管理此群组")
 	case errors.Is(err, store.ErrRoleEscalation):
@@ -253,6 +255,8 @@ func handleGroupError(w http.ResponseWriter, r *http.Request, err error) bool {
 		writeError(w, r, http.StatusConflict, "LAST_GROUP_ADMIN", "必须保留至少一个群组管理员")
 	case errors.Is(err, store.ErrAlreadyGroupMember):
 		writeError(w, r, http.StatusConflict, "ALREADY_GROUP_MEMBER", "该账号已经加入群组")
+	case errors.Is(err, store.ErrLastSuperAdmin):
+		writeError(w, r, http.StatusConflict, "LAST_SUPER_ADMIN", "必须保留至少一个超级管理员")
 	case errors.Is(err, store.ErrGroupAccountNotFound):
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "群组账号不存在")
 	default:

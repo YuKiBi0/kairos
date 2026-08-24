@@ -43,7 +43,8 @@
 ## KairosAdmin
 
 - 页面入口：/KairosAdmin/，大小写敏感。
-- 管理 API：/api/v2/kairos-admin/*。
+- 管理登录：POST `/KairosAdmin/api/login`；登录后使用 `/KairosAdmin/api/*`。
+- 当前管理 API：`/me`、`/logout`、`/groups`、`/groups/{group_id}/accounts`、`/users`（仅 L3）。写请求必须带 `X-CSRF-Token`。
 - /admin/、/Admin/ 和其他大小写变体返回 404，不做重定向。
 - L2 只能查看自己具有 L2 身份的群组；L3 管理服务器全部资源。
 
