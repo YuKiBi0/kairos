@@ -9,6 +9,7 @@ import '../data/export/json_export_service.dart';
 import '../data/local/database.dart' hide HealthEvent;
 import '../data/remote/kairos_api.dart';
 import '../data/remote/realtime_socket.dart';
+import '../data/remote/remote_models.dart';
 import '../data/repositories/local_metadata_repository.dart';
 import '../data/repositories/local_settings_repository.dart';
 import '../data/repositories/local_task_repository.dart';

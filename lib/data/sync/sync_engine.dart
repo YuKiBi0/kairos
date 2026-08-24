@@ -227,7 +227,7 @@ class SyncEngine {
       await _database
           .into(_database.localPreferences)
           .insertOnConflictUpdate(
-            const LocalPreferencesCompanion.insert(
+            LocalPreferencesCompanion.insert(
               key: _accessRevokedPreference,
               value: 'true',
             ),

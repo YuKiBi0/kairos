@@ -115,7 +115,7 @@ void main() {
     final operation = await database.select(database.outboxOperations).getSingle();
     expect(preference.value, 'true');
     expect(operation.lastError, 'FORBIDDEN_SCOPE');
-    expect(operation.nextAttemptAtUtc, isAfter(DateTime.now().toUtc()));
+    expect(operation.nextAttemptAtUtc?.isAfter(DateTime.now().toUtc()), isTrue);
 
     api.forbiddenScope = false;
     await expectLater(
@@ -126,8 +126,11 @@ void main() {
     expect(api.syncStatusCalls, 3);
     final recoveredOperation =
         await database.select(database.outboxOperations).getSingle();
-    expect(recoveredOperation.lastError, isNull);
-    expect(recoveredOperation.nextAttemptAtUtc, isBefore(DateTime.now().toUtc()));
+    expect(recoveredOperation.lastError, equals(null));
+    expect(
+      recoveredOperation.nextAttemptAtUtc?.isBefore(DateTime.now().toUtc()),
+      isTrue,
+    );
   });
 
   test('does not overwrite dirty task during snapshot', () async {

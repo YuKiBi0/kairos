@@ -165,7 +165,7 @@ class JsonExportService {
 
   String? _time(DateTime? value) => value?.toUtc().toIso8601String();
 
-  Object _decodePayload(String value) {
+  Object? _decodePayload(String value) {
     try {
       return jsonDecode(value);
     } on Object {
