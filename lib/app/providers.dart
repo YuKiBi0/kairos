@@ -135,6 +135,24 @@ final syncConflictsProvider = StreamProvider<List<SyncConflict>>((ref) {
       .watch();
 });
 
+final workspaceAccessRevokedProvider = StreamProvider<bool>((ref) {
+  final database = ref.watch(workspaceDatabaseProvider);
+  return (database.select(database.localPreferences)
+        ..where((table) => table.key.equals('workspace_access_revoked')))
+      .watchSingleOrNull()
+      .map((row) => row?.value == 'true');
+});
+
+final pendingOutboxOperationsProvider =
+    StreamProvider<List<OutboxOperation>>((ref) {
+      final database = ref.watch(workspaceDatabaseProvider);
+      return (database.select(database.outboxOperations)
+            ..orderBy(<OrderingTerm Function(OutboxOperations)>[
+              (table) => OrderingTerm.asc(table.createdAtUtc),
+            ]))
+          .watch();
+    });
+
 final workspaceControllerProvider =
     StateNotifierProvider<WorkspaceController, AppPreferences>(
       (ref) => WorkspaceController(ref.watch(settingsRepositoryProvider)),

@@ -177,6 +177,7 @@ func (s *Store) GroupAccessRole(ctx context.Context, userID, groupID uuid.UUID) 
 				SELECT account.role
 				FROM group_account_links link
 				JOIN group_accounts account ON account.id = link.group_account_id
+				JOIN users member ON member.id = link.user_id AND member.disabled_at IS NULL
 				WHERE link.user_id = $1 AND link.group_id = $2 AND link.unbound_at IS NULL AND account.active
 			), '')
 		END`, userID, groupID).Scan(&role)
@@ -293,6 +294,7 @@ func requireGroupManager(ctx context.Context, tx pgx.Tx, actorID, groupID uuid.U
 			SELECT 1
 			FROM group_account_links link
 			JOIN group_accounts account ON account.id = link.group_account_id
+			JOIN users member ON member.id = link.user_id AND member.disabled_at IS NULL
 			WHERE link.user_id = $1 AND link.group_id = $2 AND link.unbound_at IS NULL
 			  AND account.role = 'L2' AND account.active
 		)`, actorID, groupID).Scan(&allowed)
@@ -383,6 +385,7 @@ func (s *Store) UnbindGroupAccount(ctx context.Context, actorID, groupID, accoun
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM group_accounts account
 			JOIN group_account_links link ON link.group_account_id = account.id AND link.unbound_at IS NULL
+			JOIN users member ON member.id = link.user_id AND member.disabled_at IS NULL
 			WHERE account.group_id = $1 AND account.active AND account.role = 'L2'`, groupID).Scan(&count); err != nil {
 			return err
 		}
@@ -435,6 +438,7 @@ func (s *Store) SetGroupAccountRole(ctx context.Context, actorID, groupID, accou
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM group_accounts account
 			JOIN group_account_links link ON link.group_account_id = account.id AND link.unbound_at IS NULL
+			JOIN users member ON member.id = link.user_id AND member.disabled_at IS NULL
 			WHERE account.group_id = $1 AND account.active AND account.role = 'L2'`, groupID).Scan(&count); err != nil {
 			return err
 		}
@@ -597,9 +601,10 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 		         WHEN workspace.kind='personal' THEN 'L1'
 		         WHEN EXISTS (SELECT 1 FROM server_roles role WHERE role.user_id=$1 AND role.role='L3' AND role.active) THEN 'L3'
 		         ELSE COALESCE((SELECT account.role
-		           FROM group_account_links member_link
-		           JOIN group_accounts account ON account.id=member_link.group_account_id
-		           WHERE member_link.group_id=group_row.id AND member_link.user_id=$1
+			FROM group_account_links member_link
+			JOIN group_accounts account ON account.id=member_link.group_account_id
+			JOIN users member ON member.id=member_link.user_id AND member.disabled_at IS NULL
+			WHERE member_link.group_id=group_row.id AND member_link.user_id=$1
 		             AND member_link.unbound_at IS NULL AND account.active
 		           LIMIT 1), '')
 		       END,
@@ -609,7 +614,9 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 		WHERE workspace.owner_user_id = $1
 		   OR EXISTS (
 			SELECT 1 FROM group_account_links link
-			WHERE link.group_id = group_row.id AND link.user_id = $1 AND link.unbound_at IS NULL
+			JOIN group_accounts account ON account.id = link.group_account_id
+			JOIN users member ON member.id = link.user_id AND member.disabled_at IS NULL
+			WHERE link.group_id = group_row.id AND link.user_id = $1 AND link.unbound_at IS NULL AND account.active
 		   )
 		   OR EXISTS (
 			SELECT 1 FROM server_roles role

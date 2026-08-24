@@ -42,7 +42,7 @@
 - 指定 target_group_account_id 时 max_uses 强制为 1，目标必须未绑定。
 - 兑换在 PostgreSQL 单事务中锁定邀请和花名册账号；绑定成功后才增加次数。
 - KairosAdmin 在 `/KairosAdmin/api/groups/{group_id}/invites` 提供同等的列表、创建和撤销能力，并沿用管理会话、CSRF 与 L2/L3 群组作用域。
-- 群组创建、花名册创建/绑定/解绑、协作开关、角色变更和 KairosAdmin 全部写操作在 Redis 不可用时失败关闭并返回 `503 DEPENDENCY_UNAVAILABLE`。
+- 群组创建、花名册创建/绑定/解绑、邀请码创建/撤销、协作开关、角色变更和 KairosAdmin 全部写操作在 Redis 不可用时失败关闭并返回 `503 DEPENDENCY_UNAVAILABLE`。
 - 重复提交同一次成功兑换幂等，不重复计数。
 
 ## KairosAdmin
@@ -55,3 +55,7 @@
 - L2 只能查看自己具有 L2 身份的群组；L3 管理服务器全部资源。
 
 主要错误码：FORBIDDEN_SCOPE、ROLE_ESCALATION、LAST_SUPER_ADMIN、LAST_GROUP_ADMIN、INVITE_EXPIRED、INVITE_REVOKED、INVITE_EXHAUSTED、INVITE_ACCOUNT_BOUND、ALREADY_GROUP_MEMBER、DEPENDENCY_UNAVAILABLE、RATE_LIMITED。
+
+## 客户端撤权恢复
+
+群组成员失去访问权后，工作空间同步返回 `403 FORBIDDEN_SCOPE`；客户端将该空间标记为只读，暂停待上传操作，不再重试提交。设置页可导出 `kairos-recovery-*.json` 恢复包，文件包含本地业务数据和待上传操作，不包含凭据。

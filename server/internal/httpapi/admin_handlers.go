@@ -182,6 +182,10 @@ func (a *API) adminAuthenticate(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "ADMIN_UNAUTHORIZED", "管理会话无效")
 			return
 		}
+		if _, err := a.store.UserByID(r.Context(), session.UserID); err != nil {
+			writeError(w, r, http.StatusUnauthorized, "ADMIN_UNAUTHORIZED", "账号不可用")
+			return
+		}
 		role, err := a.store.AdminRole(r.Context(), session.UserID)
 		if err != nil {
 			writeError(w, r, http.StatusForbidden, "ADMIN_FORBIDDEN", "账号没有管理后台权限")

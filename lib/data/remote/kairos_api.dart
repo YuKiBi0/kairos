@@ -100,6 +100,29 @@ class KairosApi {
         .toList(growable: false);
   }
 
+  Future<RemoteWorkspace> workspaceDetail({
+    required Uri endpoint,
+    required String accessToken,
+    required String workspaceId,
+  }) async {
+    final json = await _request(
+      endpoint: endpoint,
+      method: 'GET',
+      path: '/api/v2/workspaces/$workspaceId',
+      accessToken: accessToken,
+    );
+    final value = json['workspace'];
+    if (value is! Map<String, dynamic>) {
+      throw const ApiFailure(
+        code: 'INVALID_RESPONSE',
+        message: 'Invalid workspace response.',
+        statusCode: null,
+        retryable: true,
+      );
+    }
+    return RemoteWorkspace.fromJson(value);
+  }
+
   Future<String> createGroup({
     required Uri endpoint,
     required String accessToken,

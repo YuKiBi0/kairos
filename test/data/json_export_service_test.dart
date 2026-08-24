@@ -73,4 +73,41 @@ void main() {
       expect(exported, isNot(contains('local_preferences')));
     },
   );
+
+  test('exports pending operations in recovery mode', () async {
+    await database
+        .into(database.outboxOperations)
+        .insert(
+          OutboxOperationsCompanion.insert(
+            operationId: 'operation-1',
+            entityType: 'task',
+            entityId: 'task-1',
+            baseVersion: 0,
+            payload: jsonEncode(<String, Object?>{
+              'changes': <String, Object?>{'title': '待恢复'},
+            }),
+            createdAtUtc: DateTime.utc(2026, 8, 16, 9),
+            nextAttemptAtUtc: DateTime.utc(2026, 8, 16, 10),
+          ),
+        );
+    final service = JsonExportService(
+      database: database,
+      directoryProvider: () async => exportDirectory,
+      now: () => DateTime.utc(2026, 8, 16, 9, 30),
+    );
+
+    final result = await service.exportRecovery();
+    final exported =
+        jsonDecode(await File(result.filePath).readAsString())
+            as Map<String, dynamic>;
+
+    expect(result.pendingOperationCount, 1);
+    expect(exported['recovery_mode'], true);
+    expect(exported['outbox_operations'], hasLength(1));
+    expect(
+      ((exported['outbox_operations'] as List<dynamic>).single
+          as Map<String, dynamic>)['payload'],
+      <String, dynamic>{'changes': <String, dynamic>{'title': '待恢复'}},
+    );
+  });
 }

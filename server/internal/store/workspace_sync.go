@@ -45,7 +45,9 @@ func (s *Store) WorkspaceForUser(ctx context.Context, userID, workspaceID uuid.U
 			workspace.owner_user_id = $2
 			OR EXISTS (
 				SELECT 1 FROM group_account_links link
-				WHERE link.group_id = group_row.id AND link.user_id = $2 AND link.unbound_at IS NULL
+				JOIN group_accounts account ON account.id = link.group_account_id
+				JOIN users member ON member.id = link.user_id AND member.disabled_at IS NULL
+				WHERE link.group_id = group_row.id AND link.user_id = $2 AND link.unbound_at IS NULL AND account.active
 			)
 			OR EXISTS (
 				SELECT 1 FROM server_roles role

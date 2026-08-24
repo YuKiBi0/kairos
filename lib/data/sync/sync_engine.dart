@@ -27,6 +27,13 @@ class SyncOutcome {
   final DateTime completedAtUtc;
 }
 
+class WorkspaceAccessRevokedException implements Exception {
+  const WorkspaceAccessRevokedException();
+
+  @override
+  String toString() => 'WORKSPACE_ACCESS_REVOKED: 工作空间访问权限已撤销。';
+}
+
 enum SyncConflictResolution { keepLocal, useServer }
 
 class SyncEngine {
@@ -44,6 +51,7 @@ class SyncEngine {
        _uuid = uuid;
 
   static const String _snapshotPreference = 'sync_snapshot_completed';
+  static const String _accessRevokedPreference = 'workspace_access_revoked';
 
   final AppDatabase _database;
   final KairosApi _api;
@@ -52,6 +60,14 @@ class SyncEngine {
   final Uuid _uuid;
   final String workspaceId;
   bool _running = false;
+
+  Future<bool> isWorkspaceAccessRevoked() async {
+    final row =
+        await (_database.select(_database.localPreferences)
+              ..where((table) => table.key.equals(_accessRevokedPreference)))
+            .getSingleOrNull();
+    return row?.value == 'true';
+  }
 
   Future<SyncOutcome> synchronize() async {
     if (_running) {
@@ -66,43 +82,71 @@ class SyncEngine {
       }
       final endpoint = Uri.parse(endpointRaw);
       await _ensureSyncState();
-      var status = await _api.syncStatus(
-        endpoint: endpoint,
-        accessToken: accessToken,
-        workspaceId: workspaceId,
-      );
-      final initialState = await _syncState();
-      if (initialState.serverCursor > status.serverCursor ||
-          !await _snapshotCompleted()) {
-        await _refreshSnapshot(endpoint, accessToken);
+      if (await isWorkspaceAccessRevoked()) {
+        try {
+          await _api.workspaceDetail(
+            endpoint: endpoint,
+            accessToken: accessToken,
+            workspaceId: workspaceId,
+          );
+          await _clearWorkspaceAccessRevoked();
+        } on ApiFailure catch (error) {
+          if (error.statusCode == 403 || error.code == 'FORBIDDEN_SCOPE') {
+            throw const WorkspaceAccessRevokedException();
+          }
+          rethrow;
+        }
       }
-      var pulled = await _pullToCursor(
-        endpoint,
-        accessToken,
-        status.serverCursor,
-      );
-      final push = await _push(endpoint, accessToken);
-      status = await _api.syncStatus(
-        endpoint: endpoint,
-        accessToken: accessToken,
-        workspaceId: workspaceId,
-      );
-      pulled += await _pullToCursor(endpoint, accessToken, status.serverCursor);
-      final state = await _syncState();
-      if (state.serverCursor < status.serverCursor) {
-        throw StateError(
-          'Sync stopped at cursor ${state.serverCursor} before '
-          'server cursor ${status.serverCursor}.',
+      try {
+        var status = await _api.syncStatus(
+          endpoint: endpoint,
+          accessToken: accessToken,
+          workspaceId: workspaceId,
         );
+        final initialState = await _syncState();
+        if (initialState.serverCursor > status.serverCursor ||
+            !await _snapshotCompleted()) {
+          await _refreshSnapshot(endpoint, accessToken);
+        }
+        var pulled = await _pullToCursor(
+          endpoint,
+          accessToken,
+          status.serverCursor,
+        );
+        final push = await _push(endpoint, accessToken);
+        status = await _api.syncStatus(
+          endpoint: endpoint,
+          accessToken: accessToken,
+          workspaceId: workspaceId,
+        );
+        pulled += await _pullToCursor(
+          endpoint,
+          accessToken,
+          status.serverCursor,
+        );
+        final state = await _syncState();
+        if (state.serverCursor < status.serverCursor) {
+          throw StateError(
+            'Sync stopped at cursor ${state.serverCursor} before '
+            'server cursor ${status.serverCursor}.',
+          );
+        }
+        return SyncOutcome(
+          pulled: pulled,
+          pushed: push.applied,
+          conflicts: push.conflicts,
+          pending: state.pendingCount,
+          cursor: state.serverCursor,
+          completedAtUtc: DateTime.now().toUtc(),
+        );
+      } on ApiFailure catch (error) {
+        if (workspaceId != 'personal' &&
+            (error.statusCode == 403 || error.code == 'FORBIDDEN_SCOPE')) {
+          await _markWorkspaceAccessRevoked(error.code);
+          throw const WorkspaceAccessRevokedException();
+        }
+        rethrow;
       }
-      return SyncOutcome(
-        pulled: pulled,
-        pushed: push.applied,
-        conflicts: push.conflicts,
-        pending: state.pendingCount,
-        cursor: state.serverCursor,
-        completedAtUtc: DateTime.now().toUtc(),
-      );
     } finally {
       _running = false;
     }
@@ -176,6 +220,44 @@ class SyncEngine {
         const SyncStatesCompanion(id: Value<int>(1)),
         mode: InsertMode.insertOrIgnore,
       );
+
+  Future<void> _markWorkspaceAccessRevoked(String reason) async {
+    final retryAt = DateTime.now().toUtc().add(const Duration(days: 3650));
+    await _database.transaction(() async {
+      await _database
+          .into(_database.localPreferences)
+          .insertOnConflictUpdate(
+            const LocalPreferencesCompanion.insert(
+              key: _accessRevokedPreference,
+              value: 'true',
+            ),
+          );
+      await (_database.update(_database.outboxOperations)).write(
+        OutboxOperationsCompanion(
+          nextAttemptAtUtc: Value<DateTime>(retryAt),
+          lastError: Value<String>(reason),
+        ),
+      );
+      final pending = await _database.select(_database.outboxOperations).get();
+      await (_database.update(_database.syncStates)
+            ..where((table) => table.id.equals(1)))
+          .write(SyncStatesCompanion(pendingCount: Value<int>(pending.length)));
+    });
+  }
+
+  Future<void> _clearWorkspaceAccessRevoked() async {
+    await _database.transaction(() async {
+      await (_database.delete(_database.localPreferences)
+            ..where((table) => table.key.equals(_accessRevokedPreference)))
+          .go();
+      await (_database.update(_database.outboxOperations)).write(
+        OutboxOperationsCompanion(
+          nextAttemptAtUtc: Value<DateTime>(DateTime.now().toUtc()),
+          lastError: const Value<String?>(null),
+        ),
+      );
+    });
+  }
 
   Future<SyncState> _syncState() => (_database.select(
     _database.syncStates,

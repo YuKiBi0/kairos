@@ -125,6 +125,9 @@ func (s *Store) ApplyWorkspaceOperation(
 type taskRecord struct {
 	ID               uuid.UUID
 	OwnerUserID      uuid.UUID
+	GroupAccountID   *uuid.UUID
+	CreatedByUserID  uuid.UUID
+	LastOperatorID   uuid.UUID
 	ParentID         *uuid.UUID
 	Title            string
 	Description      *string
@@ -156,6 +159,9 @@ func scanTask(row rowScanner) (taskRecord, error) {
 	err := row.Scan(
 		&task.ID,
 		&task.OwnerUserID,
+		&task.GroupAccountID,
+		&task.CreatedByUserID,
+		&task.LastOperatorID,
 		&task.ParentID,
 		&task.Title,
 		&task.Description,
@@ -193,7 +199,8 @@ func (s *Store) applyTaskOperation(
 ) (OperationResult, error) {
 	current, err := scanTask(tx.QueryRow(
 		ctx,
-		`SELECT id, user_id, parent_id, title, description, quadrant, status, due_at,
+		`SELECT id, user_id, group_account_id, created_by_user_id, last_operated_by_user_id,
+		        parent_id, title, description, quadrant, status, due_at,
 		        depth, sort_order, project_id, checklist_group_id, version,
 		        field_versions, deleted_at, created_at, updated_at, completed_at,
 		        shared_at, updated_by_device_id
@@ -215,6 +222,8 @@ func (s *Store) applyTaskOperation(
 		current = taskRecord{
 			ID:              operation.EntityID,
 			OwnerUserID:     userID,
+			CreatedByUserID: userID,
+			LastOperatorID:  userID,
 			Quadrant:        2,
 			Status:          0,
 			Depth:           1,
@@ -246,6 +255,12 @@ func (s *Store) applyTaskOperation(
 				ConflictingFields: conflicts,
 				ServerEntity:      entity,
 			}, nil
+		}
+	}
+	if creating {
+		current.GroupAccountID, err = s.activeGroupAccountForUserTx(ctx, tx, userID, workspaceID)
+		if err != nil {
+			return OperationResult{}, err
 		}
 	}
 	changedFields := normalizedChangedFields(operation)
@@ -327,14 +342,16 @@ func (s *Store) applyTaskOperation(
 		_, err = tx.Exec(
 			ctx,
 			`INSERT INTO tasks(
-			   id, user_id, workspace_id, parent_id, title, description, quadrant, status,
+			   id, user_id, workspace_id, group_account_id, created_by_user_id,
+			   last_operated_by_user_id, parent_id, title, description, quadrant, status,
 			   due_at, depth, sort_order, project_id, checklist_group_id,
 			   version, field_versions, deleted_at, created_at, updated_at,
 			   completed_at, shared_at, updated_by_device_id
 			 ) VALUES(
-			   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
+			   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
 			 )`,
-			current.ID, userID, workspaceID, current.ParentID, current.Title, current.Description,
+			current.ID, userID, workspaceID, current.GroupAccountID, current.CreatedByUserID,
+			current.LastOperatorID, current.ParentID, current.Title, current.Description,
 			current.Quadrant, current.Status, current.DueAt, current.Depth,
 			current.SortOrder, current.ProjectID, current.ChecklistGroupID,
 			current.Version, fieldVersions, current.DeletedAt, current.CreatedAt,
@@ -348,13 +365,13 @@ func (s *Store) applyTaskOperation(
 			   due_at=$8, depth=$9, sort_order=$10, project_id=$11,
 			   checklist_group_id=$12, version=$13, field_versions=$14,
 			   deleted_at=$15, updated_at=$16, completed_at=$17,
-			   shared_at=$18, updated_by_device_id=$19
+			   shared_at=$18, updated_by_device_id=$19, last_operated_by_user_id=$20
 				 WHERE workspace_id=$1 AND id=$2`,
 			workspaceID, current.ID, current.ParentID, current.Title, current.Description,
 			current.Quadrant, current.Status, current.DueAt, current.Depth,
 			current.SortOrder, current.ProjectID, current.ChecklistGroupID,
 			current.Version, fieldVersions, current.DeletedAt, current.UpdatedAt,
-			current.CompletedAt, current.SharedAt, current.UpdatedByDevice,
+			current.CompletedAt, current.SharedAt, current.UpdatedByDevice, userID,
 		)
 	}
 	if err != nil {
@@ -444,6 +461,7 @@ func (s *Store) authorizeTaskOperation(
 				SELECT account.role
 				FROM group_account_links link
 				JOIN group_accounts account ON account.id=link.group_account_id
+				JOIN users member ON member.id=link.user_id AND member.disabled_at IS NULL
 				WHERE link.user_id=$1 AND link.group_id=$2 AND link.unbound_at IS NULL AND account.active
 			), '')
 		END`, userID, *groupID).Scan(&role); err != nil {
@@ -480,6 +498,31 @@ func (s *Store) authorizeTaskOperation(
 		return operationRejection{"COLLABORATION_DISABLED", "group collaboration is disabled"}
 	}
 	return nil
+}
+
+func (s *Store) activeGroupAccountForUserTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID, workspaceID uuid.UUID,
+) (*uuid.UUID, error) {
+	var accountID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT link.group_account_id
+		FROM workspaces workspace
+		JOIN groups group_row ON group_row.id = workspace.group_id
+		JOIN group_account_links link ON link.group_id = group_row.id
+		JOIN group_accounts account ON account.id = link.group_account_id
+		WHERE workspace.id = $1 AND link.user_id = $2
+		  AND link.unbound_at IS NULL AND account.active
+		ORDER BY link.bound_at DESC
+		LIMIT 1`, workspaceID, userID).Scan(&accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &accountID, nil
 }
 
 func conflictingFields(

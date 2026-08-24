@@ -37,6 +37,9 @@ func (a *API) createInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
 	a.createInviteForActor(w, r, actorID, groupID)
 }
 
@@ -100,6 +103,9 @@ func (a *API) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	groupID, inviteID, ok := inviteParams(w, r)
 	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
 		return
 	}
 	a.revokeInviteForActor(w, r, actorID, groupID, inviteID)

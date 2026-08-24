@@ -33,6 +33,7 @@ func (s *Store) AdminRole(ctx context.Context, userID uuid.UUID) (string, error)
 			WHEN EXISTS (
 				SELECT 1 FROM group_account_links link
 				JOIN group_accounts account ON account.id=link.group_account_id
+				JOIN users member ON member.id=link.user_id AND member.disabled_at IS NULL
 				WHERE link.user_id=$1 AND link.unbound_at IS NULL AND account.active AND account.role='L2'
 			) THEN 'L2'
 			ELSE '' END`, userID).Scan(&role)
@@ -74,6 +75,7 @@ func (s *Store) AdminGroups(ctx context.Context, userID uuid.UUID, role string) 
 	if role != "L3" {
 		query += ` JOIN group_account_links link ON link.group_id=group_row.id
 			JOIN group_accounts account ON account.id=link.group_account_id
+			JOIN users member ON member.id=link.user_id AND member.disabled_at IS NULL
 			WHERE link.user_id=$1 AND link.unbound_at IS NULL AND account.active AND account.role='L2'`
 		args = append(args, userID)
 	}
@@ -99,6 +101,7 @@ func (s *Store) AdminGroupAccounts(ctx context.Context, actorID, groupID uuid.UU
 		var allowed bool
 		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(
 			SELECT 1 FROM group_account_links link JOIN group_accounts account ON account.id=link.group_account_id
+			JOIN users member ON member.id=link.user_id AND member.disabled_at IS NULL
 			WHERE link.user_id=$1 AND link.group_id=$2 AND link.unbound_at IS NULL AND account.active AND account.role='L2'
 		)`, actorID, groupID).Scan(&allowed); err != nil {
 			return nil, err

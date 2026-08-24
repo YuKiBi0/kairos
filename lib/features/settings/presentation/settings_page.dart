@@ -60,6 +60,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final sync = ref.watch(syncControllerProvider);
     final localSync = ref.watch(localSyncStateProvider);
     final conflicts = ref.watch(syncConflictsProvider);
+    final accessRevoked = ref.watch(workspaceAccessRevokedProvider);
+    final workspaceIsReadOnly = accessRevoked.when(
+      data: (value) => value,
+      error: (_, _) => false,
+      loading: () => false,
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: ListView(
@@ -134,7 +140,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         runSpacing: 8,
                         children: <Widget>[
                           FilledButton.icon(
-                            onPressed: sync.phase == SyncPhase.running
+                            onPressed: workspaceIsReadOnly ||
+                                    sync.phase == SyncPhase.running
                                 ? null
                                 : _synchronize,
                             icon: sync.phase == SyncPhase.running
@@ -201,6 +208,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           if (auth.phase == AuthPhase.authenticated && auth.session != null)
             const _GroupMembershipSection(),
+          if (auth.phase == AuthPhase.authenticated && auth.session != null)
+            const _WorkspaceRecoverySection(),
           conflicts.when(
             data: (items) => items.isEmpty
                 ? const SizedBox.shrink()
@@ -329,6 +338,77 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('数据未导出：$error')));
+      }
+    }
+  }
+}
+
+class _WorkspaceRecoverySection extends ConsumerWidget {
+  const _WorkspaceRecoverySection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final revoked = ref.watch(workspaceAccessRevokedProvider);
+    return revoked.when(
+      data: (isRevoked) => isRevoked
+          ? _SettingsSection(
+              title: '工作空间只读恢复',
+              description: '你已被移出此群组，系统已停止同步。待上传操作只能导出，不能继续提交。',
+              child: _RecoveryContent(ref: ref),
+            )
+          : const SizedBox.shrink(),
+      error: (error, _) => const SizedBox.shrink(),
+      loading: () => const SizedBox.shrink(),
+    );
+  }
+}
+
+class _RecoveryContent extends ConsumerWidget {
+  const _RecoveryContent({required this.ref});
+
+  final WidgetRef ref;
+
+  @override
+  Widget build(BuildContext context, WidgetRef _) {
+    final pending = ref.watch(pendingOutboxOperationsProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        pending.when(
+          data: (items) => Text('待恢复操作 ${items.length} 条'),
+          error: (error, _) => Text('无法读取待恢复操作：$error'),
+          loading: () => const LinearProgressIndicator(),
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: () => _export(context),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('导出待恢复数据'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _export(BuildContext context) async {
+    try {
+      final result = await ref.read(jsonExportServiceProvider).exportRecovery();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '已导出 ${result.pendingOperationCount} 条待恢复操作到 ${result.filePath}',
+            ),
+          ),
+        );
+      }
+    } on Object catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('恢复数据未导出：$error')));
       }
     }
   }
