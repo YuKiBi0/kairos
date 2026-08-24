@@ -115,7 +115,7 @@ void main() {
     final operation = await database.select(database.outboxOperations).getSingle();
     expect(preference.value, 'true');
     expect(operation.lastError, 'FORBIDDEN_SCOPE');
-    expect(operation.nextAttemptAtUtc?.isAfter(DateTime.now().toUtc()), isTrue);
+    expect(operation.nextAttemptAtUtc.isAfter(DateTime.now().toUtc()), isTrue);
 
     api.forbiddenScope = false;
     await expectLater(
@@ -128,7 +128,7 @@ void main() {
         await database.select(database.outboxOperations).getSingle();
     expect(recoveredOperation.lastError, equals(null));
     expect(
-      recoveredOperation.nextAttemptAtUtc?.isBefore(DateTime.now().toUtc()),
+      recoveredOperation.nextAttemptAtUtc.isBefore(DateTime.now().toUtc()),
       isTrue,
     );
   });
