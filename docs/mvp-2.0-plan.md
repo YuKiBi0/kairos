@@ -4,7 +4,18 @@
 
 ## 1. 当前基线与目标
 
-当前版本是 Flutter 离线优先客户端、Go HTTP/WebSocket 服务端和 PostgreSQL 单账号同步系统。数据库中任务、标签、项目、清单、困难点、同步操作和变更游标均直接按 `user_id` 隔离；Redis、群组、花名册、管理会话和管理页面尚未实现。
+初始基线是 Flutter 离线优先客户端、Go HTTP/WebSocket 服务端和 PostgreSQL 单账号同步系统。数据库中任务、标签、项目、清单、困难点、同步操作和变更游标直接按 `user_id` 隔离；本分支在此基础上逐步加入 Redis、群组、花名册、工作空间同步、协作和 KairosAdmin。
+
+当前实现状态：
+
+| 领域 | 状态 | 主要验收证据 |
+| --- | --- | --- |
+| Redis 健康、限流和敏感操作失败关闭 | 已实现 | `go test ./...`、Redis RESP 测试、HTTP 依赖降级测试 |
+| 群组、花名册、绑定、邀请和 RBAC | 已实现 | PostgreSQL store/HTTP 集成测试、30 天和次数约束 |
+| 多工作空间同步与客户端切换 | 已实现 | v2 工作空间 API、Flutter 每空间 SQLite、切换测试 |
+| 撤权只读恢复区 | 已实现 | 403 撤权测试、恢复包导出测试 |
+| 协作和 KairosAdmin | 已实现 | 协作不可逆、CSRF/CSP/入口大小写和管理 API 测试 |
+| Flutter 全平台构建与自动化门禁 | 待在本机 SDK 权限恢复后完成 | 当前环境的 Flutter 全局 lockfile 权限仍阻塞 |
 
 MVP 2.0 的交付目标如下：
 
