@@ -25,7 +25,10 @@ try {
     Push-Location $serverRoot
     try {
         go run ./cmd/kairos-server migrate
-        go test -tags integration ./internal/store ./internal/httpapi
+        # These integration packages share the same temporary database. Run
+        # them sequentially so global L3 bootstrap fixtures cannot race.
+        go test -tags integration ./internal/store
+        go test -tags integration ./internal/httpapi
     }
     finally {
         Pop-Location

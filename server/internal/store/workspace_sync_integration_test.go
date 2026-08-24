@@ -149,6 +149,15 @@ func TestGroupTaskSharingRequiresCollaborationAndExplicitShare(t *testing.T) {
 	if err != nil || created.Status != "applied" {
 		t.Fatalf("failed to create private group task: result=%#v err=%v", created, err)
 	}
+	var createdEntity map[string]any
+	if err := json.Unmarshal(created.ServerEntity, &createdEntity); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"group_account_id", "created_by_user_id", "last_operated_by_user_id"} {
+		if createdEntity[field] == nil {
+			t.Fatalf("group task should record %s: %#v", field, createdEntity)
+		}
+	}
 	memberSnapshot, err := database.WorkspaceSnapshot(ctx, group.WorkspaceID, member.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +203,13 @@ func TestGroupTaskSharingRequiresCollaborationAndExplicitShare(t *testing.T) {
 	})
 	if err != nil || updated.Status != "applied" {
 		t.Fatalf("shared task should accept member edits: result=%#v err=%v", updated, err)
+	}
+	var updatedEntity map[string]any
+	if err := json.Unmarshal(updated.ServerEntity, &updatedEntity); err != nil {
+		t.Fatal(err)
+	}
+	if updatedEntity["last_operated_by_user_id"] != member.ID.String() {
+		t.Fatalf("member edit should record the last operator: %#v", updatedEntity)
 	}
 	_, err = database.ApplyWorkspaceOperation(ctx, owner.ID, ownerDevice.ID, group.WorkspaceID, PushOperation{
 		OperationID: uuid.New(), EntityType: "task", EntityID: taskID, BaseVersion: updated.Version,
