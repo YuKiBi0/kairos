@@ -778,6 +778,7 @@ func (s *Store) updateDescendantDepths(
 		   depth=depth+$3,
 		   version=version+1,
 		   updated_at=now(),
+		   last_operated_by_user_id=$4,
 		   field_versions=jsonb_set(
 		     field_versions, '{depth}', to_jsonb(version+1), true
 		   )
@@ -786,6 +787,7 @@ func (s *Store) updateDescendantDepths(
 		workspaceID,
 		rootID,
 		delta,
+		userID,
 	)
 	if err != nil {
 		return err
