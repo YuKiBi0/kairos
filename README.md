@@ -71,3 +71,11 @@ Kairos 适合希望在手机上随手记录、在电脑上集中整理，并愿�
 - [API v1](docs/api.md)
 - [API 变更记录](docs/api-changelog.md)
 - [MVP 已知限制](docs/known-limitations.md)
+
+## MVP 2.0
+
+多账号、群组花名册、邀请码、分级 RBAC、多工作空间同步、协作和 KairosAdmin 正在按 [MVP 2.0 规格](docs/mvp-2.0-spec.md) 和 [实施计划](docs/mvp-2.0-plan.md) 开发。
+
+- [MVP 2.0 产品与技术基线](docs/mvp-2.0-spec.md)
+- [API v2（开发中）](docs/api-v2.md)
+- [MVP 2.0 实施计划](docs/mvp-2.0-plan.md)
