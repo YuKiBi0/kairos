@@ -6,7 +6,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | /workspaces | 当前真实账号可访问的个人和群组空间 |
+| GET | /workspaces | 当前真实账号可访问的个人和群组空间，包含 display_name 与 role |
 | GET | /workspaces/{workspace_id} | 工作空间摘要与群组身份 |
 | GET | /workspaces/{workspace_id}/sync/snapshot | 首次快照 |
 | GET | /workspaces/{workspace_id}/sync/changes | 游标增量 |

@@ -596,13 +596,16 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 		       CASE
 		         WHEN workspace.kind='personal' THEN 'L1'
 		         WHEN EXISTS (SELECT 1 FROM server_roles role WHERE role.user_id=$1 AND role.role='L3' AND role.active) THEN 'L3'
-		         ELSE COALESCE(account.role, '')
+		         ELSE COALESCE((SELECT account.role
+		           FROM group_account_links member_link
+		           JOIN group_accounts account ON account.id=member_link.group_account_id
+		           WHERE member_link.group_id=group_row.id AND member_link.user_id=$1
+		             AND member_link.unbound_at IS NULL AND account.active
+		           LIMIT 1), '')
 		       END,
 		       workspace.owner_user_id, workspace.group_id, workspace.created_at
 		FROM workspaces workspace
 		LEFT JOIN groups group_row ON group_row.id = workspace.group_id
-		LEFT JOIN group_account_links link ON link.group_id=group_row.id AND link.user_id=$1 AND link.unbound_at IS NULL
-		LEFT JOIN group_accounts account ON account.id=link.group_account_id AND account.active
 		WHERE workspace.owner_user_id = $1
 		   OR EXISTS (
 			SELECT 1 FROM group_account_links link

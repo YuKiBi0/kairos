@@ -379,6 +379,7 @@ class _FakeApi extends KairosApi {
   Future<Map<String, dynamic>> snapshot({
     required Uri endpoint,
     required String accessToken,
+    String workspaceId = 'personal',
   }) async {
     snapshotCalls++;
     final cursor = (snapshotResponse['cursor'] as num).toInt();
@@ -392,6 +393,7 @@ class _FakeApi extends KairosApi {
   Future<RemoteSyncStatus> syncStatus({
     required Uri endpoint,
     required String accessToken,
+    String workspaceId = 'personal',
   }) async {
     for (final page in changesPages) {
       if (page.serverCursor > serverCursor) {
@@ -411,6 +413,7 @@ class _FakeApi extends KairosApi {
     required String accessToken,
     required int after,
     int limit = 200,
+    String workspaceId = 'personal',
   }) async {
     requestedAfter.add(after);
     if (changesPages.isEmpty) {
@@ -431,6 +434,7 @@ class _FakeApi extends KairosApi {
     required Uri endpoint,
     required String accessToken,
     required List<Map<String, Object?>> operations,
+    String workspaceId = 'personal',
   }) async {
     pushedOperations = operations;
     final pushedChanges = <RemoteChange>[];

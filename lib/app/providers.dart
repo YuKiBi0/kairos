@@ -34,12 +34,21 @@ final databaseProvider = Provider<AppDatabase>((ref) {
   return database;
 });
 
+final workspaceDatabaseProvider = Provider<AppDatabase>((ref) {
+  final workspaceId = ref.watch(
+    workspaceControllerProvider.select((preferences) => preferences.workspaceId),
+  );
+  final database = AppDatabase.openForWorkspace(workspaceId);
+  ref.onDispose(database.close);
+  return database;
+});
+
 final taskRepositoryProvider = Provider<TaskRepository>(
-  (ref) => LocalTaskRepository(ref.watch(databaseProvider)),
+  (ref) => LocalTaskRepository(ref.watch(workspaceDatabaseProvider)),
 );
 
 final metadataRepositoryProvider = Provider<MetadataRepository>(
-  (ref) => LocalMetadataRepository(ref.watch(databaseProvider)),
+  (ref) => LocalMetadataRepository(ref.watch(workspaceDatabaseProvider)),
 );
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
@@ -65,7 +74,7 @@ final networkMonitorProvider = Provider<NetworkMonitor>(
 );
 
 final jsonExportServiceProvider = Provider<JsonExportService>(
-  (ref) => JsonExportService(database: ref.watch(databaseProvider)),
+  (ref) => JsonExportService(database: ref.watch(workspaceDatabaseProvider)),
 );
 
 final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
@@ -78,12 +87,31 @@ final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
 
 final syncEngineProvider = Provider<SyncEngine>(
   (ref) => SyncEngine(
-    database: ref.watch(databaseProvider),
+    database: ref.watch(workspaceDatabaseProvider),
     api: ref.watch(kairosApiProvider),
     auth: ref.watch(authControllerProvider.notifier),
     settings: ref.watch(settingsRepositoryProvider),
+    workspaceId: ref.watch(
+      workspaceControllerProvider.select((preferences) => preferences.workspaceId),
+    ),
   ),
 );
+
+final remoteWorkspacesProvider = FutureProvider<List<RemoteWorkspace>>((ref) async {
+  final authState = ref.watch(authControllerProvider);
+  if (authState.phase != AuthPhase.authenticated) {
+    return const <RemoteWorkspace>[];
+  }
+  final endpointRaw = await ref.watch(settingsRepositoryProvider).readServiceEndpoint();
+  final accessToken = await ref.watch(authControllerProvider.notifier).accessToken();
+  if (endpointRaw == null || accessToken == null) {
+    return const <RemoteWorkspace>[];
+  }
+  return ref.watch(kairosApiProvider).workspaces(
+    endpoint: Uri.parse(endpointRaw),
+    accessToken: accessToken,
+  );
+});
 
 final syncControllerProvider =
     StateNotifierProvider<SyncController, SyncControllerState>(
@@ -91,14 +119,14 @@ final syncControllerProvider =
     );
 
 final localSyncStateProvider = StreamProvider<SyncState?>((ref) {
-  final database = ref.watch(databaseProvider);
+  final database = ref.watch(workspaceDatabaseProvider);
   return (database.select(
     database.syncStates,
   )..where((table) => table.id.equals(1))).watchSingleOrNull();
 });
 
 final syncConflictsProvider = StreamProvider<List<SyncConflict>>((ref) {
-  final database = ref.watch(databaseProvider);
+  final database = ref.watch(workspaceDatabaseProvider);
   return (database.select(database.syncConflicts)
         ..where((table) => table.resolvedAtUtc.isNull())
         ..orderBy(<OrderingTerm Function(SyncConflicts)>[
@@ -154,7 +182,7 @@ final realtimeControllerProvider = Provider<RealtimeController>((ref) {
     auth: ref.watch(authControllerProvider.notifier),
     connector: ref.watch(realtimeConnectorProvider),
     network: ref.watch(networkMonitorProvider),
-    synchronize: ref.watch(syncEngineProvider).synchronize,
+    synchronize: () => ref.read(syncEngineProvider).synchronize(),
     onStatus: (status) {
       ref.read(realtimeStatusProvider.notifier).state = status;
     },
@@ -168,6 +196,11 @@ final realtimeControllerProvider = Provider<RealtimeController>((ref) {
       (previous, next) => controller.authStateChanged(next),
       fireImmediately: true,
     )
+    ..listen<AppPreferences>(workspaceControllerProvider, (previous, next) {
+      if (previous?.workspaceId != next.workspaceId) {
+        unawaited(controller.workspaceChanged());
+      }
+    })
     ..listen<AsyncValue<SyncState?>>(localSyncStateProvider, (previous, next) {
       next.whenData((syncState) {
         if (syncState != null) {
@@ -302,6 +335,14 @@ class WorkspaceController extends StateNotifier<AppPreferences> {
 
   void setCompactWorkspace(bool value) =>
       _update(state.copyWith(compactWorkspace: value));
+
+  void setWorkspace(String workspaceId) {
+    final normalized = workspaceId.trim();
+    if (normalized.isEmpty || normalized == state.workspaceId) {
+      return;
+    }
+    _update(state.copyWith(workspaceId: normalized));
+  }
 
   void clearFilters() => _update(
     state.copyWith(

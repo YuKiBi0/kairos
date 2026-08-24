@@ -421,6 +421,9 @@ class _WorkspaceHeader extends ConsumerWidget {
                 ],
               ),
             ),
+            const SizedBox(width: 10),
+            _WorkspacePicker(preferences: preferences),
+            const SizedBox(width: 8),
             FilledButton.icon(
               onPressed: onCreate,
               icon: const Icon(Icons.add),
@@ -569,6 +572,69 @@ class _WorkspaceHeader extends ConsumerWidget {
       ],
     ),
   );
+}
+
+class _WorkspacePicker extends ConsumerWidget {
+  const _WorkspacePicker({required this.preferences});
+
+  final AppPreferences preferences;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workspaces = ref.watch(remoteWorkspacesProvider);
+    return workspaces.when(
+      loading: () => const SizedBox(
+        width: 150,
+        height: 42,
+        child: LinearProgressIndicator(),
+      ),
+      error: (_, _) => OutlinedButton.icon(
+        onPressed: () => ref.invalidate(remoteWorkspacesProvider),
+        icon: const Icon(Icons.cloud_off_outlined),
+        label: const Text('工作区不可用'),
+      ),
+      data: (values) {
+        if (values.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final selected = values.any((item) => item.id == preferences.workspaceId)
+            ? preferences.workspaceId
+            : values.first.id;
+        if (selected != preferences.workspaceId) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (context.mounted) {
+              ref.read(workspaceControllerProvider.notifier).setWorkspace(selected);
+            }
+          });
+        }
+        return DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: selected,
+            icon: const Icon(Icons.unfold_more, size: 18),
+            borderRadius: BorderRadius.circular(6),
+            items: <DropdownMenuItem<String>>[
+              for (final workspace in values)
+                DropdownMenuItem<String>(
+                  value: workspace.id,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 170),
+                    child: Text(
+                      workspace.displayName,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                ref.read(workspaceControllerProvider.notifier).setWorkspace(value);
+              }
+            },
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _TaskFilterSheet extends ConsumerWidget {

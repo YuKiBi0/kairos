@@ -103,21 +103,27 @@ class KairosApi {
   Future<Map<String, dynamic>> snapshot({
     required Uri endpoint,
     required String accessToken,
+    String workspaceId = 'personal',
   }) => _request(
     endpoint: endpoint,
     method: 'GET',
-    path: '/api/v1/sync/snapshot',
+    path: workspaceId == 'personal'
+        ? '/api/v1/sync/snapshot'
+        : '/api/v2/workspaces/$workspaceId/sync/snapshot',
     accessToken: accessToken,
   );
 
   Future<RemoteSyncStatus> syncStatus({
     required Uri endpoint,
     required String accessToken,
+    String workspaceId = 'personal',
   }) async {
     final json = await _request(
       endpoint: endpoint,
       method: 'GET',
-      path: '/api/v1/sync/status',
+      path: workspaceId == 'personal'
+          ? '/api/v1/sync/status'
+          : '/api/v2/workspaces/$workspaceId/sync/status',
       accessToken: accessToken,
     );
     return RemoteSyncStatus.fromJson(json);
@@ -128,11 +134,14 @@ class KairosApi {
     required String accessToken,
     required int after,
     int limit = 200,
+    String workspaceId = 'personal',
   }) async {
     final json = await _request(
       endpoint: endpoint,
       method: 'GET',
-      path: '/api/v1/sync/changes',
+      path: workspaceId == 'personal'
+          ? '/api/v1/sync/changes'
+          : '/api/v2/workspaces/$workspaceId/sync/changes',
       accessToken: accessToken,
       query: <String, Object?>{'after': after, 'limit': limit},
     );
@@ -151,11 +160,14 @@ class KairosApi {
     required Uri endpoint,
     required String accessToken,
     required List<Map<String, Object?>> operations,
+    String workspaceId = 'personal',
   }) async {
     final json = await _request(
       endpoint: endpoint,
       method: 'POST',
-      path: '/api/v1/sync/push',
+      path: workspaceId == 'personal'
+          ? '/api/v1/sync/push'
+          : '/api/v2/workspaces/$workspaceId/sync/push',
       accessToken: accessToken,
       data: <String, Object?>{'operations': operations},
     );

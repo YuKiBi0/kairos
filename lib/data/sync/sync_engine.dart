@@ -35,6 +35,7 @@ class SyncEngine {
     required KairosApi api,
     required AccessTokenProvider auth,
     required SettingsRepository settings,
+    this.workspaceId = 'personal',
     Uuid uuid = const Uuid(),
   }) : _database = database,
        _api = api,
@@ -49,6 +50,7 @@ class SyncEngine {
   final AccessTokenProvider _auth;
   final SettingsRepository _settings;
   final Uuid _uuid;
+  final String workspaceId;
   bool _running = false;
 
   Future<SyncOutcome> synchronize() async {
@@ -67,6 +69,7 @@ class SyncEngine {
       var status = await _api.syncStatus(
         endpoint: endpoint,
         accessToken: accessToken,
+        workspaceId: workspaceId,
       );
       final initialState = await _syncState();
       if (initialState.serverCursor > status.serverCursor ||
@@ -82,6 +85,7 @@ class SyncEngine {
       status = await _api.syncStatus(
         endpoint: endpoint,
         accessToken: accessToken,
+        workspaceId: workspaceId,
       );
       pulled += await _pullToCursor(endpoint, accessToken, status.serverCursor);
       final state = await _syncState();
@@ -189,6 +193,7 @@ class SyncEngine {
     final snapshot = await _api.snapshot(
       endpoint: endpoint,
       accessToken: accessToken,
+      workspaceId: workspaceId,
     );
     await _applySnapshot(snapshot);
   }
@@ -327,6 +332,7 @@ class SyncEngine {
       final status = await _api.syncStatus(
         endpoint: endpoint,
         accessToken: accessToken,
+        workspaceId: workspaceId,
       );
       return _pull(endpoint, accessToken, status.serverCursor);
     }
@@ -341,6 +347,7 @@ class SyncEngine {
         endpoint: endpoint,
         accessToken: accessToken,
         after: cursor,
+        workspaceId: workspaceId,
       );
       _validateChangesPage(page, after: cursor);
       if (page.serverCursor > targetCursor) {
@@ -438,6 +445,7 @@ class SyncEngine {
         endpoint: endpoint,
         accessToken: accessToken,
         operations: operations,
+        workspaceId: workspaceId,
       );
       await _database.transaction(() async {
         for (final result in results) {

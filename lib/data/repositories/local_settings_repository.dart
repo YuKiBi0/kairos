@@ -37,6 +37,7 @@ class LocalSettingsRepository implements SettingsRepository {
   Future<void> savePreferences(AppPreferences preferences) => _write(
     _preferencesKey,
     jsonEncode(<String, Object?>{
+      'workspace_id': preferences.workspaceId,
       'view_mode': preferences.viewMode.name,
       'sort_mode': preferences.sortMode.name,
       'scope': preferences.scope.name,
@@ -114,6 +115,7 @@ class LocalSettingsRepository implements SettingsRepository {
     try {
       final json = jsonDecode(source) as Map<String, dynamic>;
       return AppPreferences(
+        workspaceId: json['workspace_id'] as String? ?? 'personal',
         viewMode: TaskViewMode.values.byName(
           json['view_mode'] as String? ?? TaskViewMode.list.name,
         ),
