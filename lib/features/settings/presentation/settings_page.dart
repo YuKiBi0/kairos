@@ -291,6 +291,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ? 'Kairos Windows'
                 : 'Kairos Android',
           );
+      ref.read(workspaceControllerProvider.notifier).resetToPersonal();
       _passwordController.clear();
       await _synchronize();
     } on Object {
@@ -300,6 +301,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _logout() async {
     await ref.read(authControllerProvider.notifier).logout();
+    ref.read(workspaceControllerProvider.notifier).resetToPersonal();
   }
 
   Future<void> _synchronize() async {
@@ -473,7 +475,7 @@ class _GroupMembershipSectionState
                                 ? '个人任务'
                                 : '群组角色 ${workspace.role}',
                           ),
-                          trailing: workspace.id == selected
+                          trailing: (workspace.isPersonal ? 'personal' : workspace.id) == selected
                               ? const Icon(
                                   Icons.check_circle,
                                   color: KairosColors.moss,
@@ -483,7 +485,7 @@ class _GroupMembershipSectionState
                                       .read(
                                         workspaceControllerProvider.notifier,
                                       )
-                                      .setWorkspace(workspace.id),
+                                       .setWorkspace(workspace.isPersonal ? 'personal' : workspace.id),
                                   child: const Text('切换'),
                                 ),
                         ),

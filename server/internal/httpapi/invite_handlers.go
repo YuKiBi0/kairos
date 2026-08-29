@@ -196,6 +196,8 @@ func handleInviteError(w http.ResponseWriter, r *http.Request, err error) bool {
 		return false
 	}
 	switch {
+	case errors.Is(err, store.ErrGroupArchived):
+		writeError(w, r, http.StatusConflict, "GROUP_ARCHIVED", "群组已停用，暂不能加入")
 	case errors.Is(err, store.ErrGroupForbidden):
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN_SCOPE", "无权管理此群组")
 	case errors.Is(err, store.ErrGroupAccountNotFound):

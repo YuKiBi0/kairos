@@ -175,8 +175,12 @@ class AppDatabase extends _$AppDatabase {
 
   factory AppDatabase.open() => AppDatabase(_openConnection());
 
-  factory AppDatabase.openForWorkspace(String workspaceId) =>
-      AppDatabase(_openConnection(workspaceId: workspaceId));
+  factory AppDatabase.openForWorkspace(
+    String workspaceId, {
+    String? ownerUserId,
+  }) => AppDatabase(
+    _openConnection(workspaceId: workspaceId, ownerUserId: ownerUserId),
+  );
 
   @override
   int get schemaVersion => 1;
@@ -222,11 +226,13 @@ class AppDatabase extends _$AppDatabase {
   }
 }
 
-LazyDatabase _openConnection({String workspaceId = 'personal'}) => LazyDatabase(() async {
+LazyDatabase _openConnection({String workspaceId = 'personal', String? ownerUserId}) => LazyDatabase(() async {
   final documents = await getApplicationSupportDirectory();
+  final safeWorkspaceId = workspaceId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+  final safeOwnerId = ownerUserId?.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
   final fileName = workspaceId == 'personal'
-      ? 'kairos.sqlite'
-      : 'kairos-workspace-${workspaceId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')}.sqlite';
+      ? 'kairos-personal-${safeOwnerId ?? 'legacy'}.sqlite'
+      : 'kairos-workspace-$safeWorkspaceId.sqlite';
   final file = File(path.join(documents.path, fileName));
   return NativeDatabase.createInBackground(file);
 });

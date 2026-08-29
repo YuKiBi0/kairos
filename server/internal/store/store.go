@@ -199,6 +199,28 @@ func (s *Store) UpsertDevice(
 		&device.Platform,
 		&device.LastSeen,
 	)
+	if err != nil && requestedID != nil && errors.Is(err, pgx.ErrNoRows) {
+		// A device identifier is local to a client installation, not to a
+		// server account. If the same installation signs in as another user,
+		// allocate a new server-side device instead of returning a session error.
+		deviceID = uuid.New()
+		err = s.pool.QueryRow(
+			ctx,
+			`INSERT INTO devices(id, user_id, name, platform, last_seen_at)
+			 VALUES($1, $2, $3, $4, now())
+			 RETURNING id, user_id, name, platform, last_seen_at`,
+			deviceID,
+			userID,
+			name,
+			platform,
+		).Scan(
+			&device.ID,
+			&device.UserID,
+			&device.Name,
+			&device.Platform,
+			&device.LastSeen,
+		)
+	}
 	if err != nil {
 		return Device{}, fmt.Errorf("upsert device: %w", err)
 	}

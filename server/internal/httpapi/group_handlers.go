@@ -98,6 +98,50 @@ func (a *API) groupDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"group": group})
 }
 
+func (a *API) setGroupArchived(w http.ResponseWriter, r *http.Request) {
+	actorID, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
+		return
+	}
+	groupID, ok := groupIDParam(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
+	var request struct {
+		Archived bool `json:"archived"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if handleGroupError(w, r, a.store.SetGroupArchived(r.Context(), actorID, groupID, request.Archived)) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) deleteGroup(w http.ResponseWriter, r *http.Request) {
+	actorID, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
+		return
+	}
+	groupID, ok := groupIDParam(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
+	if handleGroupError(w, r, a.store.DeleteGroup(r.Context(), actorID, groupID)) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) groupAccounts(w http.ResponseWriter, r *http.Request) {
 	userID, _, authenticated := identity(r.Context())
 	if !authenticated {
@@ -155,7 +199,8 @@ func (a *API) createGroupAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 type bindGroupAccountRequest struct {
-	UserID string `json:"user_id"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
 }
 
 func (a *API) bindGroupAccount(w http.ResponseWriter, r *http.Request) {
@@ -175,9 +220,23 @@ func (a *API) bindGroupAccount(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	targetUserID, err := uuid.Parse(strings.TrimSpace(request.UserID))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "真实账号 ID 无效")
+	var targetUserID uuid.UUID
+	if rawID := strings.TrimSpace(request.UserID); rawID != "" {
+		parsedID, err := uuid.Parse(rawID)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "真实账号 ID 无效")
+			return
+		}
+		targetUserID = parsedID
+	} else if username := strings.TrimSpace(request.Username); username != "" {
+		user, lookupErr := a.store.UserByUsername(r.Context(), username)
+		if lookupErr != nil {
+			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "真实账号不存在或已停用")
+			return
+		}
+		targetUserID = user.ID
+	} else {
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "必须提供真实账号 ID 或账号名")
 		return
 	}
 	link, err := a.store.BindGroupAccount(r.Context(), actorID, groupID, accountID, targetUserID)
@@ -301,6 +360,8 @@ func handleGroupError(w http.ResponseWriter, r *http.Request, err error) bool {
 		writeError(w, r, http.StatusConflict, "LAST_SUPER_ADMIN", "必须保留至少一个超级管理员")
 	case errors.Is(err, store.ErrGroupAccountNotFound):
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "群组账号不存在")
+	case errors.Is(err, store.ErrGroupArchived):
+		writeError(w, r, http.StatusConflict, "GROUP_ARCHIVED", "群组已停用")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "DATABASE_ERROR", "群组操作失败")
 	}

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/theme/organic_theme.dart';
+import '../../../data/remote/remote_models.dart';
 import '../../../domain/entities/app_preferences.dart';
 import '../../../domain/entities/task.dart';
 import '../../../domain/entities/task_filter.dart';
@@ -42,6 +43,7 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
   Widget build(BuildContext context) {
     final preferences = ref.watch(workspaceControllerProvider);
     final items = ref.watch(visibleTaskItemsProvider);
+    final canCreate = _canCreateInCurrentWorkspace(preferences.workspaceId);
     final compactWorkspace =
         !kIsWeb &&
         defaultTargetPlatform == TargetPlatform.windows &&
@@ -49,7 +51,7 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-            _createTask,
+            () => _createTask(),
       },
       child: Focus(
         autofocus: true,
@@ -65,7 +67,7 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
                     onSearchChanged: ref
                         .read(workspaceControllerProvider.notifier)
                         .setSearchText,
-                    onCreate: _createTask,
+                    onCreate: canCreate ? _createTask : null,
                     onShowFilters: _showFilters,
                   ),
                 Expanded(
@@ -81,7 +83,7 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
                                   height:
                                       MediaQuery.sizeOf(context).height -
                                       (compactWorkspace ? 64 : 220),
-                                  child: _EmptyWorkspace(onCreate: _createTask),
+                                  child: _EmptyWorkspace(onCreate: canCreate ? _createTask : null),
                                 ),
                               ],
                             )
@@ -100,7 +102,7 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
               ? null
               : FloatingActionButton(
                   tooltip: '新建任务',
-                  onPressed: _createTask,
+                  onPressed: canCreate ? _createTask : null,
                   child: const Icon(Icons.add),
                 ),
         ),
@@ -132,10 +134,47 @@ class _TaskWorkspacePageState extends ConsumerState<TaskWorkspacePage> {
         ),
       };
 
-  Future<void> _createTask() => _openCreateDialog();
+  bool _canCreateInCurrentWorkspace(String workspaceId) {
+    if (workspaceId == 'personal') {
+      return true;
+    }
+    final remote = ref.read(remoteWorkspacesProvider);
+    if (!remote.hasValue) {
+      return true;
+    }
+    for (final workspace in remote.value ?? const <RemoteWorkspace>[]) {
+      if (!workspace.isPersonal && workspace.id == workspaceId) {
+        return !workspace.archived;
+      }
+    }
+    // A group workspace missing from the accessible list was removed or
+    // unbound. Keep local data readable, but prevent new server-bound work.
+    return false;
+  }
 
-  Future<void> _createChild(TaskListItem item) =>
-      _openCreateDialog(parent: item.task);
+  Future<void> _createTask() async {
+    if (!_canCreateInCurrentWorkspace(
+      ref.read(workspaceControllerProvider).workspaceId,
+    )) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前群组已停用或已移出，不能新建任务')),
+        );
+      }
+      return;
+    }
+    await _openCreateDialog();
+  }
+
+  Future<void> _createChild(TaskListItem item) async {
+    if (!_canCreateInCurrentWorkspace(
+      ref.read(workspaceControllerProvider).workspaceId,
+    )) {
+      await _createTask();
+      return;
+    }
+    await _openCreateDialog(parent: item.task);
+  }
 
   Future<void> _openCreateDialog({Task? parent}) async {
     final draft = await showDialog<TaskDraft>(
@@ -395,7 +434,7 @@ class _WorkspaceHeader extends ConsumerWidget {
   final TextEditingController searchController;
   final AppPreferences preferences;
   final ValueChanged<String> onSearchChanged;
-  final VoidCallback onCreate;
+  final VoidCallback? onCreate;
   final VoidCallback onShowFilters;
 
   @override
@@ -597,9 +636,11 @@ class _WorkspacePicker extends ConsumerWidget {
         if (values.isEmpty) {
           return const SizedBox.shrink();
         }
-        final selected = values.any((item) => item.id == preferences.workspaceId)
+        String workspaceKey(RemoteWorkspace item) =>
+            item.isPersonal ? 'personal' : item.id;
+        final selected = values.any((item) => workspaceKey(item) == preferences.workspaceId)
             ? preferences.workspaceId
-            : values.first.id;
+            : workspaceKey(values.first);
         if (selected != preferences.workspaceId) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (context.mounted) {
@@ -615,7 +656,7 @@ class _WorkspacePicker extends ConsumerWidget {
             items: <DropdownMenuItem<String>>[
               for (final workspace in values)
                 DropdownMenuItem<String>(
-                  value: workspace.id,
+                  value: workspaceKey(workspace),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 170),
                     child: Text(
@@ -824,7 +865,7 @@ class _TaskFilterSheet extends ConsumerWidget {
 class _EmptyWorkspace extends StatelessWidget {
   const _EmptyWorkspace({required this.onCreate});
 
-  final VoidCallback onCreate;
+  final VoidCallback? onCreate;
 
   @override
   Widget build(BuildContext context) => Center(

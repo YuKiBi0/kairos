@@ -212,10 +212,23 @@
   const groupItem = async (group) => {
     const item = node('article', 'item');
     const head = node('div', 'item-head');
-    head.append(node('strong', '', group.name), node('span', 'badge', group.collaboration_enabled_at ? '协作已开启' : '协作关闭'));
+    head.append(node('strong', '', group.name), node('span', 'badge', group.archived ? '已停用' : (group.collaboration_enabled_at ? '协作已开启' : '协作关闭')));
     item.append(head, node('div', 'meta', `群组 ID ${group.id}`));
     const groupActions = node('div', 'actions');
-    if (!group.collaboration_enabled_at) {
+    groupActions.append(button(group.archived ? '恢复群组' : '停用群组', async () => {
+      const action = group.archived ? '恢复' : '停用';
+      if (!window.confirm(`${action}群组 ${group.name}？`)) return;
+      await mutate(`/groups/${group.id}/archived`, 'PUT', { archived: !group.archived });
+      await renderGroups();
+    }, group.archived ? 'quiet' : 'danger'));
+    if (role === 'L3') {
+      groupActions.append(button('删除群组', async () => {
+        if (!window.confirm(`删除群组 ${group.name}？服务端数据将永久删除，本地数据不会自动删除。`)) return;
+        await mutate(`/groups/${group.id}`, 'DELETE');
+        await renderGroups();
+      }, 'danger'));
+    }
+    if (!group.archived && !group.collaboration_enabled_at) {
       groupActions.append(button('开启协作', async () => {
         if (!window.confirm('协作开启后不能关闭。确定开启？')) return;
         await mutate(`/groups/${group.id}/collaboration`, 'POST'); await renderGroups();
@@ -274,12 +287,14 @@
 
   $('create-group-form').addEventListener('submit', async (event) => {
     event.preventDefault(); const submit = event.currentTarget.querySelector('button'); submit.disabled = true;
-    try { await mutate('/groups', 'POST', { name: new FormData(event.currentTarget).get('name') }); event.currentTarget.reset(); await renderGroups(); }
+    const form = event.currentTarget;
+    try { await mutate('/groups', 'POST', { name: new FormData(form).get('name') }); form.reset(); await renderGroups(); }
     catch (error) { $('group-error').textContent = error.message; } finally { submit.disabled = false; }
   });
   $('create-user-form').addEventListener('submit', async (event) => {
     event.preventDefault(); const submit = event.currentTarget.querySelector('button'); submit.disabled = true;
-    try { await mutate('/users', 'POST', Object.fromEntries(new FormData(event.currentTarget))); event.currentTarget.reset(); await renderUsers(); }
+    const form = event.currentTarget;
+    try { await mutate('/users', 'POST', Object.fromEntries(new FormData(form))); form.reset(); await renderUsers(); }
     catch (error) { $('user-error').textContent = error.message; } finally { submit.disabled = false; }
   });
   $('login-form').addEventListener('submit', async (event) => {
