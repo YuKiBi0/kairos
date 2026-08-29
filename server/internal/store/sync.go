@@ -452,6 +452,13 @@ func (s *Store) authorizeTaskOperation(
 	if groupID == nil {
 		return operationRejection{"FORBIDDEN_SCOPE", "workspace group is missing"}
 	}
+	var archived bool
+	if err := tx.QueryRow(ctx, `SELECT archived FROM groups WHERE id = $1`, *groupID).Scan(&archived); err != nil {
+		return err
+	}
+	if archived && creating {
+		return operationRejection{"GROUP_ARCHIVED", "archived groups cannot accept new tasks"}
+	}
 
 	var role string
 	if err := tx.QueryRow(ctx, `

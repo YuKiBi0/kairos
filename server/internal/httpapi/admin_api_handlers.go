@@ -237,6 +237,44 @@ func (a *API) adminCreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"user": user})
 }
 
+func (a *API) adminSetGroupArchived(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := groupIDParam(w, r)
+	if !ok {
+		return
+	}
+	var request struct {
+		Archived bool `json:"archived"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
+	if handleGroupError(w, r, a.store.SetGroupArchived(r.Context(), adminUserID(r), groupID, request.Archived)) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) adminDeleteGroup(w http.ResponseWriter, r *http.Request) {
+	if adminRole(r.Context()) != "L3" {
+		writeError(w, r, http.StatusForbidden, "ADMIN_FORBIDDEN", "只有超级管理员可以删除群组")
+		return
+	}
+	groupID, ok := groupIDParam(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireRedisDependency(w, r) {
+		return
+	}
+	if handleGroupError(w, r, a.store.DeleteGroup(r.Context(), adminUserID(r), groupID)) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) adminSetUserDisabled(w http.ResponseWriter, r *http.Request) {
 	if adminRole(r.Context()) != "L3" {
 		writeError(w, r, http.StatusForbidden, "ADMIN_FORBIDDEN", "只有超级管理员可以停用服务器账号")

@@ -76,6 +76,7 @@ class RemoteWorkspace {
     required this.displayName,
     required this.role,
     this.groupId,
+    this.archived = false,
   });
 
   factory RemoteWorkspace.fromJson(Map<String, dynamic> json) => switch (json) {
@@ -90,6 +91,7 @@ class RemoteWorkspace {
       displayName: displayName,
       role: role,
       groupId: json['group_id'] as String?,
+      archived: json['archived'] as bool? ?? false,
     ),
     _ => throw const FormatException('Invalid remote workspace.'),
   };
@@ -99,6 +101,7 @@ class RemoteWorkspace {
   final String displayName;
   final String role;
   final String? groupId;
+  final bool archived;
 
   bool get isPersonal => kind == 'personal';
 }

@@ -183,6 +183,13 @@ func (s *Store) RedeemGroupInvite(ctx context.Context, userID uuid.UUID, digest 
 	if err != nil {
 		return GroupInviteRedemption{}, err
 	}
+	var archived bool
+	if err := tx.QueryRow(ctx, `SELECT archived FROM groups WHERE id = $1`, invite.GroupID).Scan(&archived); err != nil {
+		return GroupInviteRedemption{}, err
+	}
+	if archived {
+		return GroupInviteRedemption{}, ErrGroupArchived
+	}
 	var existing GroupInviteRedemption
 	err = tx.QueryRow(ctx, `
 		SELECT id, invite_id, user_id, group_account_id, idempotency_key, redeemed_at
