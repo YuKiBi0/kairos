@@ -39,7 +39,11 @@ final workspaceDatabaseProvider = Provider<AppDatabase>((ref) {
   final workspaceId = ref.watch(
     workspaceControllerProvider.select((preferences) => preferences.workspaceId),
   );
-  final database = AppDatabase.openForWorkspace(workspaceId);
+  final userId = ref.watch(authControllerProvider.select((state) => state.session?.user.id));
+  final database = AppDatabase.openForWorkspace(
+    workspaceId,
+    ownerUserId: userId ?? 'guest',
+  );
   ref.onDispose(database.close);
   return database;
 });
@@ -293,9 +297,18 @@ class WorkspaceController extends StateNotifier<AppPreferences> {
 
   final SettingsRepository _settings;
   Timer? _searchSaveTimer;
+  bool _resetToPersonalAfterHydrate = false;
 
   Future<void> _hydrate() async {
-    state = await _settings.loadPreferences();
+    final loaded = await _settings.loadPreferences();
+    state = _resetToPersonalAfterHydrate
+        ? loaded.copyWith(workspaceId: 'personal')
+        : loaded;
+  }
+
+  void resetToPersonal() {
+    _resetToPersonalAfterHydrate = true;
+    _update(state.copyWith(workspaceId: 'personal'));
   }
 
   void setViewMode(TaskViewMode value) =>

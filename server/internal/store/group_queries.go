@@ -20,6 +20,7 @@ var (
 	ErrLastSuperAdmin       = errors.New("the last super administrator cannot be disabled")
 	ErrSuperAdminExists     = errors.New("a super administrator already exists")
 	ErrAlreadyGroupMember   = errors.New("user is already a member of this group")
+	ErrGroupArchived        = errors.New("group is archived")
 )
 
 type Workspace struct {
@@ -30,6 +31,7 @@ type Workspace struct {
 	OwnerUserID *uuid.UUID `json:"owner_user_id,omitempty"`
 	GroupID     *uuid.UUID `json:"group_id,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
+	Archived    bool       `json:"archived,omitempty"`
 }
 
 type Group struct {
@@ -276,6 +278,83 @@ func (s *Store) SetCollaborationEnabled(ctx context.Context, actorID, groupID uu
 	return tx.Commit(ctx)
 }
 
+func (s *Store) SetGroupArchived(ctx context.Context, actorID, groupID uuid.UUID, archived bool) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockGroup(ctx, tx, groupID); err != nil {
+		return err
+	}
+	if err := requireGroupManagerAny(ctx, tx, actorID, groupID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE groups SET archived = $2 WHERE id = $1`, groupID, archived); err != nil {
+		return err
+	}
+	action := "group.archive"
+	if !archived {
+		action = "group.unarchive"
+	}
+	if err := insertAuditEvent(ctx, tx, actorID, &groupID, action, "group", groupID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteGroup(ctx context.Context, actorID, groupID uuid.UUID) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockGroup(ctx, tx, groupID); err != nil {
+		return err
+	}
+	isL3, err := actorIsSuperAdminTx(ctx, tx, actorID)
+	if err != nil {
+		return err
+	}
+	if !isL3 {
+		return ErrGroupForbidden
+	}
+	var workspaceID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT workspace_id FROM groups WHERE id = $1`, groupID).Scan(&workspaceID); err != nil {
+		return err
+	}
+	// Delete server-side group data in dependency order. Client databases are
+	// intentionally untouched and will enter the normal revoked/404 recovery path.
+	for _, query := range []string{
+		`DELETE FROM group_invite_redemptions WHERE invite_id IN (SELECT id FROM group_invites WHERE group_id = $1)`,
+		`DELETE FROM group_invites WHERE group_id = $1`,
+		`DELETE FROM group_account_links WHERE group_id = $1`,
+		`DELETE FROM group_accounts WHERE group_id = $1`,
+		`DELETE FROM audit_events WHERE group_id = $1`,
+		`DELETE FROM groups WHERE id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, query, groupID); err != nil {
+			return err
+		}
+	}
+	for _, query := range []string{
+		`DELETE FROM task_tags WHERE workspace_id = $1`,
+		`DELETE FROM blockers WHERE workspace_id = $1`,
+		`DELETE FROM tasks WHERE workspace_id = $1`,
+		`DELETE FROM projects WHERE workspace_id = $1`,
+		`DELETE FROM checklist_groups WHERE workspace_id = $1`,
+		`DELETE FROM tags WHERE workspace_id = $1`,
+		`DELETE FROM sync_operations WHERE workspace_id = $1`,
+		`DELETE FROM sync_changes WHERE workspace_id = $1`,
+		`DELETE FROM workspaces WHERE id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, query, workspaceID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func lockGroup(ctx context.Context, tx pgx.Tx, groupID uuid.UUID) error {
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&id); errors.Is(err, pgx.ErrNoRows) {
@@ -286,6 +365,13 @@ func lockGroup(ctx context.Context, tx pgx.Tx, groupID uuid.UUID) error {
 }
 
 func requireGroupManager(ctx context.Context, tx pgx.Tx, actorID, groupID uuid.UUID) error {
+	var archived bool
+	if err := tx.QueryRow(ctx, `SELECT archived FROM groups WHERE id = $1`, groupID).Scan(&archived); err != nil {
+		return err
+	}
+	if archived {
+		return ErrGroupArchived
+	}
 	var allowed bool
 	err := tx.QueryRow(ctx, `
 		SELECT EXISTS(
@@ -298,6 +384,23 @@ func requireGroupManager(ctx context.Context, tx pgx.Tx, actorID, groupID uuid.U
 			WHERE link.user_id = $1 AND link.group_id = $2 AND link.unbound_at IS NULL
 			  AND account.role = 'L2' AND account.active
 		)`, actorID, groupID).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrGroupForbidden
+	}
+	return nil
+}
+
+func requireGroupManagerAny(ctx context.Context, tx pgx.Tx, actorID, groupID uuid.UUID) error {
+	var allowed bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM server_roles WHERE user_id=$1 AND role='L3' AND active)
+		   OR EXISTS(SELECT 1 FROM group_account_links link
+		      JOIN group_accounts account ON account.id=link.group_account_id
+		      WHERE link.user_id=$1 AND link.group_id=$2 AND link.unbound_at IS NULL
+		        AND account.role='L2' AND account.active)`, actorID, groupID).Scan(&allowed)
 	if err != nil {
 		return err
 	}
@@ -377,7 +480,9 @@ func (s *Store) UnbindGroupAccount(ctx context.Context, actorID, groupID, accoun
 	if err := lockGroup(ctx, tx, groupID); err != nil {
 		return err
 	}
-	if err := requireGroupManager(ctx, tx, actorID, groupID); err != nil {
+	// Membership removal remains available while a group is archived so
+	// administrators can clean up access without reopening task creation.
+	if err := requireGroupManagerAny(ctx, tx, actorID, groupID); err != nil {
 		return err
 	}
 	actorIsL3, err := actorIsSuperAdminTx(ctx, tx, actorID)
@@ -626,7 +731,8 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 		             AND member_link.unbound_at IS NULL AND account.active
 		           LIMIT 1), '')
 		       END,
-		       workspace.owner_user_id, workspace.group_id, workspace.created_at
+		       workspace.owner_user_id, workspace.group_id, workspace.created_at,
+		       COALESCE(group_row.archived, false)
 		FROM workspaces workspace
 		LEFT JOIN groups group_row ON group_row.id = workspace.group_id
 		WHERE workspace.owner_user_id = $1
@@ -648,7 +754,7 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 	workspaces := make([]Workspace, 0)
 	for rows.Next() {
 		var workspace Workspace
-		if err := rows.Scan(&workspace.ID, &workspace.Kind, &workspace.DisplayName, &workspace.Role, &workspace.OwnerUserID, &workspace.GroupID, &workspace.CreatedAt); err != nil {
+		if err := rows.Scan(&workspace.ID, &workspace.Kind, &workspace.DisplayName, &workspace.Role, &workspace.OwnerUserID, &workspace.GroupID, &workspace.CreatedAt, &workspace.Archived); err != nil {
 			return nil, err
 		}
 		workspaces = append(workspaces, workspace)
