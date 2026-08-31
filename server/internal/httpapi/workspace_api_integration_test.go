@@ -80,7 +80,7 @@ func TestWorkspaceSyncRoutesEnforceScope(t *testing.T) {
 		t.Fatalf("cross-user group snapshot should be forbidden: %d", status)
 	}
 	status, body := requestAPI(t, http.MethodGet, server.URL+"/api/v2/workspaces", ownerToken, nil)
-	if status != http.StatusOK || !bytes.Contains(body, []byte(`"display_name":"个人任务"`)) {
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"display_name":"`+owner.Username+`"`)) {
 		t.Fatalf("workspace catalog should include display name: status=%d body=%s", status, body)
 	}
 	status, body = requestAPI(t, http.MethodGet, server.URL+"/api/v2/workspaces/"+personal.ID.String(), ownerToken, nil)
