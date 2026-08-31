@@ -719,7 +719,7 @@ func (s *Store) SetUserDisabled(ctx context.Context, actorID, targetUserID uuid.
 func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) ([]Workspace, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT workspace.id, workspace.kind,
-		       CASE WHEN workspace.kind='personal' THEN '个人任务' ELSE group_row.name END,
+		       CASE WHEN workspace.kind='personal' THEN owner_user.username ELSE group_row.name END,
 		       CASE
 		         WHEN workspace.kind='personal' THEN 'L1'
 		         WHEN EXISTS (SELECT 1 FROM server_roles role WHERE role.user_id=$1 AND role.role='L3' AND role.active) THEN 'L3'
@@ -735,6 +735,7 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 		       COALESCE(group_row.archived, false)
 		FROM workspaces workspace
 		LEFT JOIN groups group_row ON group_row.id = workspace.group_id
+		LEFT JOIN users owner_user ON owner_user.id = workspace.owner_user_id
 		WHERE workspace.owner_user_id = $1
 		   OR EXISTS (
 			SELECT 1 FROM group_account_links link
@@ -744,7 +745,7 @@ func (s *Store) ListAccessibleWorkspaces(ctx context.Context, userID uuid.UUID) 
 		   )
 		   OR EXISTS (
 			SELECT 1 FROM server_roles role
-			WHERE role.user_id = $1 AND role.role = 'L3' AND role.active
+			WHERE workspace.kind = 'group' AND role.user_id = $1 AND role.role = 'L3' AND role.active
 		   )
 		ORDER BY workspace.kind, workspace.created_at, workspace.id`, userID)
 	if err != nil {

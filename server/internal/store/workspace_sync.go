@@ -51,7 +51,7 @@ func (s *Store) WorkspaceForUser(ctx context.Context, userID, workspaceID uuid.U
 			)
 			OR EXISTS (
 				SELECT 1 FROM server_roles role
-				WHERE role.user_id = $2 AND role.role = 'L3' AND role.active
+				WHERE workspace.kind = 'group' AND role.user_id = $2 AND role.role = 'L3' AND role.active
 			)
 		)`, workspaceID, userID,
 	).Scan(&workspace.ID, &workspace.Kind, &workspace.OwnerUserID, &workspace.GroupID, &workspace.CreatedAt)
