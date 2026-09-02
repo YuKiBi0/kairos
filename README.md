@@ -84,6 +84,7 @@ flutter run -d windows
 - [API v1](docs/api.md)
 - [API v2：群组、工作空间与 KairosAdmin](docs/api-v2.md)
 - [API 变更记录](docs/api-changelog.md)
+- [Kairos CLI 产品需求与开发 PRD](docs/kairos-cli-prd.md)
 - [MVP 2.0 产品与技术基线](docs/mvp-2.0-spec.md)
 - [MVP 2.0 实施与发布计划](docs/mvp-2.0-plan.md)
 - [当前限制与明确不支持的范围](docs/known-limitations.md)
