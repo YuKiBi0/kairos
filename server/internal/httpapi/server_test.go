@@ -50,6 +50,15 @@ func TestHealthReportsRedisDegraded(t *testing.T) {
 	}
 }
 
+func TestCentralTokenIssuanceRouteIsRemoved(t *testing.T) {
+	handler := New(nil, config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v3/tokens", strings.NewReader(`{"scope":"central:tasks:create"}`)))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("removed central token route returned status %d", recorder.Code)
+	}
+}
+
 func TestSensitiveMutationRequiresRedis(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPut, "/KairosAdmin/api/users/id/super-admin", nil)
 	recorder := httptest.NewRecorder()

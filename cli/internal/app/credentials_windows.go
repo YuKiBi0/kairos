@@ -59,7 +59,7 @@ func LoadCredentials(server string) (Credentials, error) {
 	return value, nil
 }
 
-func SaveCredentials(server string, value Credentials, _ bool) error {
+func SaveCredentials(server string, value Credentials) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -78,6 +78,23 @@ func SaveCredentials(server string, value Credentials, _ bool) error {
 		return fmt.Errorf("write Windows Credential Manager: %w", callErr)
 	}
 	return nil
+}
+
+func UpdateCredentials(server string, update func(Credentials) (Credentials, error)) (Credentials, error) {
+	current, err := LoadCredentials(server)
+	if err != nil {
+		return Credentials{}, err
+	}
+	updated, err := update(current)
+	if err != nil {
+		return Credentials{}, err
+	}
+	if updated != current {
+		if err := SaveCredentials(server, updated); err != nil {
+			return Credentials{}, err
+		}
+	}
+	return updated, nil
 }
 
 func DeleteCredentials(server string) error {

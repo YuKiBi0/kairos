@@ -49,7 +49,7 @@ go test -p 1 ./...
 先添加一个服务 Profile：
 
 ```text
-kairos server add prod --url https://kairos.example.com
+kairos server add --url https://kairos.example.com prod
 ```
 
 然后登录。密码可以通过环境变量传入，避免出现在 shell 历史中：
@@ -84,17 +84,16 @@ kairos --output json task list
 
 全局参数可以放在命令前，也可以放在命令参数中：
 
-| 参数 | 说明 | 默认值 |
-| --- | --- | --- |
-| `--server NAME` | 使用指定服务 Profile | 当前服务 |
-| `--workspace ID` | 使用指定工作空间 | 当前工作空间或 `personal` |
-| `--output table\|json\|ndjson` | 输出格式 | `table` |
-| `--quiet` | 表格模式下隐藏成功输出，错误仍写入 stderr | 关闭 |
-| `--request-timeout DURATION` | 单次 HTTP 请求超时，例如 `15s` | `15s` |
-| `--wait-timeout DURATION` | `task run --wait` 的本地等待超时 | `30m` |
-| `--no-color` | 禁用颜色输出 | 关闭 |
-| `--insecure` | 开发环境跳过 TLS 证书校验 | 关闭 |
-| `--allow-encrypted-file` | Unix 上允许使用本地 AES-GCM 凭据文件 | 关闭 |
+| 参数                             | 说明                        | 默认值                |
+| ------------------------------ | ------------------------- | ------------------ |
+| `--server NAME`                | 使用指定服务 Profile            | 当前服务               |
+| `--workspace ID`               | 使用指定工作空间                  | 当前工作空间或 `personal` |
+| `--output table\|json\|ndjson` | 输出格式                      | `table`            |
+| `--quiet`                      | 表格模式下隐藏成功输出，错误仍写入 stderr  | 关闭                 |
+| `--request-timeout DURATION`   | 单次 HTTP 请求超时，例如 `15s`     | `15s`              |
+| `--wait-timeout DURATION`      | `task run --wait` 的本地等待超时 | `30m`              |
+| `--no-color`                   | 禁用颜色输出                    | 关闭                 |
+| `--insecure`                   | 开发环境跳过 TLS 证书校验           | 关闭                 |
 
 `--insecure` 必须同时设置 `KAIROS_ALLOW_INSECURE=1`，并在交互终端输入 `INSECURE` 确认；CI 和其他非交互环境会被拒绝。生产环境应使用 HTTPS，并保持证书校验开启。
 
@@ -111,7 +110,6 @@ KAIROS_WAIT_TIMEOUT     本地等待超时
 KAIROS_USERNAME         login 的用户名
 KAIROS_PASSWORD         login 的密码
 KAIROS_RUNNER_TOKEN     runner serve 使用的一次性 Runner Token
-KAIROS_CREDENTIAL_KEY   Unix 加密凭据文件的本地密钥，至少 16 个字符
 ```
 
 例如 CI 可以完全不写入本地凭据：
@@ -157,12 +155,8 @@ kairos server remove dev
 Token 不写入 YAML：
 
 - Windows 使用 Credential Manager。
-- Unix 默认拒绝保存凭据。明确允许后，设置密钥并在登录时加 `--allow-encrypted-file`：
-
-  ```bash
-  export KAIROS_CREDENTIAL_KEY='至少十六个字符的本地密钥'
-  kairos --allow-encrypted-file login --server prod --username owner
-  ```
+- Unix 自动保存到 `$XDG_CONFIG_HOME/kairos/credentials.json`（默认 `~/.config/kairos/credentials.json`），目录权限为 `0700`、凭据和锁文件权限为 `0600`；不需要额外密钥或登录参数。
+- access token 临期时，CLI 使用保存的 refresh token 自动续期。Unix 使用跨进程文件锁串行化续期，因此同一服务器用户打开的新终端可以直接复用登录态。
 
 - CI 推荐使用 `KAIROS_TOKEN`，不会把 Token 写入磁盘。
 
@@ -177,7 +171,7 @@ kairos logout --all
 kairos whoami
 ```
 
-`logout` 删除本地凭据；`logout --all` 还会请求服务端撤销当前 refresh token。收到 `401` 时，CLI 只提示重新登录，不会打印请求头或 Token。
+`logout` 删除本地凭据；`logout --all` 还会请求服务端撤销当前 refresh token。CLI 会在请求前自动刷新临期登录态；refresh token 失效或刷新后仍收到 `401` 时提示重新登录，不会打印请求头或 Token。
 
 ## 6. 工作空间命令
 
@@ -288,16 +282,11 @@ kairos runner serve \
 
 Runner 会注册能力、发送 15 秒心跳，并在收到 SIGINT/SIGTERM 时通知服务端退出。Runner Token 不应写入普通配置文件或命令历史。
 
-## 10. CI Token
+## 10. 跨终端登录态
 
-CLI 的短期 Token 接口由服务端签发。当前仓库已实现的服务端 scope 是中央委派 scope；普通 `task:read` 等 CI scope 需要部署对应的 Token 服务后才能使用。
+`kairos login` 会保存普通登录会话。后续命令优先复用有效的 access token，临期时自动调用 `/api/v1/auth/refresh` 并原子更新 access/refresh token；服务器上的新终端无需重新登录，也无需导出任何凭据密钥。
 
-```text
-kairos token create --scope central:tasks:create --expires-in 2h
-kairos token revoke TOKEN_ID
-```
-
-Token 最长有效期为 24 小时，创建响应只显示一次。中央 Agent 应将响应中的 Token 写入密钥管理系统，再通过 `KAIROS_CENTRAL_TOKEN` 注入；普通任务 Token 使用 `KAIROS_TOKEN`。服务端会校验 scope、L3 角色、设备状态和过期时间。
+显式设置 `KAIROS_TOKEN` 时仍以环境变量为准，适合由现有部署系统注入的 CI 会话；CLI 不会把环境变量 Token 写入磁盘，也不会尝试刷新它。
 
 ## 11. 中央委派 CLI（L3 / Agent）
 
@@ -306,30 +295,17 @@ Token 最长有效期为 24 小时，创建响应只显示一次。中央 Agent 
 ### 11.1 前置条件
 
 1. 服务端已完成最新数据库迁移并部署中央 API。
-2. 签发令牌的登录账号具有服务器 `L3` 角色。
+2. 当前登录账号具有服务器 `L3` 角色。
 3. 目标工作空间必须是指定群组的群组工作空间，不能是任何个人工作空间。
 4. 目标用户必须是该群组中仍处于绑定、启用状态的成员。
 
-先使用普通 L3 登录令牌签发短期中央令牌：
+直接登录 L3 账号：
 
 ```text
 kairos login --server prod --username super-admin --password "..."
-kairos --server prod token create --scope central:tasks:create --expires-in 2h
 ```
 
-`token create` 响应中的 `access_token` 只显示一次。只把它注入中央 Agent 的受保护环境，不要写入 YAML、脚本仓库或命令历史：
-
-```bash
-export KAIROS_CENTRAL_TOKEN='服务端返回的一次性中央令牌'
-```
-
-PowerShell 使用：
-
-```powershell
-$env:KAIROS_CENTRAL_TOKEN = "服务端返回的一次性中央令牌"
-```
-
-中央令牌是服务端签名的短期 JWT，包含 `central:tasks:create` scope 和过期时间。普通 `KAIROS_TOKEN` 没有该 scope，即使账号是 L1/L2 或未申请中央令牌，也会被服务端拒绝。
+中央命令与普通命令共享该登录态。服务端在每次中央请求中校验当前账号仍为 L3 且登录设备未撤销；L1/L2 会被拒绝。服务端不再提供中央令牌签发接口，也无需单独注入中央凭据或申请中央 scope。
 
 ### 11.2 为指定成员创建任务
 
@@ -381,15 +357,16 @@ kairos central task create --json-file task.json --idempotency-key REQUEST_UUID
 
 ### 11.4 权限拒绝与排障
 
-| 错误码 | 含义 |
-| --- | --- |
-| `CENTRAL_TOKEN_REQUIRED` | CLI 未设置 `KAIROS_CENTRAL_TOKEN` |
-| `FORBIDDEN_SCOPE` | 令牌没有中央 scope，或操作者不是 L3 |
-| `TARGET_NOT_GROUP_MEMBER` | 目标用户不是群组的有效成员，或已解绑/禁用 |
-| `WORKSPACE_GROUP_MISMATCH` | 工作空间不是该群组的群组工作空间 |
-| `GROUP_ARCHIVED` | 归档群组禁止新建任务 |
-| `IDEMPOTENCY_KEY_REUSED` | 幂等键已被其他中央操作者使用 |
-| `VALIDATION_ERROR` | UUID、标题、优先级或幂等键格式错误 |
+| 错误码                        | 含义                             |
+| -------------------------- | ------------------------------ |
+| `UNAUTHENTICATED`          | 尚未登录，或保存的 refresh token 已失效       |
+| `INVALID_REFRESH_TOKEN`    | 服务端已撤销会话或 refresh token 已过期       |
+| `FORBIDDEN_ROLE`           | 当前登录账号不是 L3                       |
+| `TARGET_NOT_GROUP_MEMBER`  | 目标用户不是群组的有效成员，或已解绑/禁用          |
+| `WORKSPACE_GROUP_MISMATCH` | 工作空间不是该群组的群组工作空间               |
+| `GROUP_ARCHIVED`           | 归档群组禁止新建任务                     |
+| `IDEMPOTENCY_KEY_REUSED`   | 幂等键已被其他中央操作者使用                 |
+| `VALIDATION_ERROR`         | UUID、标题、优先级或幂等键格式错误            |
 
 中央接口明确禁止个人工作空间委派。中央账号也不会因为 L3 角色自动获得其他用户个人任务的读取权限；需要读取时必须使用目标产品授权的群组工作空间流程。
 
@@ -397,16 +374,16 @@ kairos central task create --json-file task.json --idempotency-key REQUEST_UUID
 
 表格模式的错误写入 stderr；`json` 和 `ndjson` 模式的错误事件写入 stdout。错误对象包含 `code`、`message`、`request_id`，必要时包含 `details`。
 
-| 退出码 | 含义 |
-| ---: | --- |
-| 0 | 成功 |
-| 1 | 通用错误 |
-| 2 | 参数或配置错误 |
-| 3 | 未认证或 Token 过期 |
-| 4 | 无权限 |
-| 5 | 服务不可达、TLS 或协议错误 |
-| 6 | Run 进入 `failed`、`cancelled` 或 `timed_out` |
-| 7 | 仅 CLI 本地等待超时，Run 尚未结束 |
+| 退出码 | 含义                                        |
+| ---:| ----------------------------------------- |
+| 0   | 成功                                        |
+| 1   | 通用错误                                      |
+| 2   | 参数或配置错误                                   |
+| 3   | 未认证或 Token 过期                             |
+| 4   | 无权限                                       |
+| 5   | 服务不可达、TLS 或协议错误                           |
+| 6   | Run 进入 `failed`、`cancelled` 或 `timed_out` |
+| 7   | 仅 CLI 本地等待超时，Run 尚未结束                     |
 
 脚本示例：
 
@@ -425,7 +402,7 @@ esac
 
 ## 13. 服务端兼容性与排障
 
-当前仓库服务端已提供 `/api/v1` 认证、任务同步、`/api/v2` 工作空间接口，以及中央委派所需的 `/api/v3/tokens` 和 `/api/v3/central/tasks`。Run、Runner 等其他 v3 能力仍需对应服务端模块；在尚未部署目标 v3 能力的服务端上，CLI 会返回结构化 404，这是版本不兼容而不是 CLI 参数错误。
+当前仓库服务端已提供 `/api/v1` 认证、任务同步、`/api/v2` 工作空间接口，以及中央委派所需的 `/api/v3/central/tasks`。Run、Runner 等其他 v3 能力仍需对应服务端模块；在尚未部署目标 v3 能力的服务端上，CLI 会返回结构化 404，这是版本不兼容而不是 CLI 参数错误。
 
 常用排障命令：
 
@@ -439,14 +416,13 @@ kairos --output json whoami
 
 ## 14. API 对应关系
 
-| CLI 能力 | 服务端接口 |
-| --- | --- |
-| 登录、注销、当前用户 | `/api/v1/auth/*` |
-| 个人任务同步与读取 | `/api/v1/sync/*`、`/api/v1/tasks/*` |
-| 群组工作空间 | `/api/v2/workspaces/*` |
-| Run、日志、结果 | `/api/v3/runs/*` |
-| Runner | `/api/v3/runners/*` |
-| 中央委派 Token | `/api/v3/tokens` |
-| 中央委派任务 | `/api/v3/central/tasks` |
+| CLI 能力     | 服务端接口                              |
+| ---------- | ---------------------------------- |
+| 登录、注销、当前用户 | `/api/v1/auth/*`                   |
+| 个人任务同步与读取  | `/api/v1/sync/*`、`/api/v1/tasks/*` |
+| 群组工作空间     | `/api/v2/workspaces/*`             |
+| Run、日志、结果  | `/api/v3/runs/*`                   |
+| Runner     | `/api/v3/runners/*`                |
+| 中央委派任务     | `/api/v3/central/tasks`            |
 
 CLI 不直接连接 PostgreSQL 或 Redis，也不通过 SSH 执行远程命令。

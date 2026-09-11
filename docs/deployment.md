@@ -49,6 +49,52 @@ go run .\cmd\kairos-server --env-file D:\secure\kairos.env serve
 
 ## 二进制部署
 
+### Ubuntu 一键构建与系统更新
+
+在仓库根目录运行：
+
+```bash
+bash ./build-ubuntu.sh
+```
+
+脚本会根据当前 Ubuntu 主机自动选择 `linux/amd64` 或 `linux/arm64`，并把所有可保留的构建输入与产物统一放在仓库上级的 `kairos-build`：
+
+```text
+<仓库上级>/kairos-build/
+├── kairos.env
+├── SHA256SUMS
+├── cli/kairos
+└── server/
+    ├── kairos-server
+    └── migrations/*.sql
+```
+
+首次运行且系统尚未安装 Kairos 时，脚本会从 `server/.env.example` 创建权限为 `0600` 的 `kairos.env`，自动生成会话密钥并设置生产环境和迁移目录。由于数据库地址无法安全猜测，脚本会要求编辑其中的 `KAIROS_DATABASE_URL` 后重新运行。已有系统安装但尚无构建目录时，脚本会自动把 `/etc/kairos/kairos.env` 复制到上述位置作为后续更新的配置来源。
+
+配置有效后，一次运行会依次完成：
+
+1. 运行 server 和 CLI 的 Go 测试；
+2. 使用 `CGO_ENABLED=0` 构建两个 Linux 二进制并生成 SHA-256；
+3. 首次安装时创建 `kairos` 系统用户、迁移数据库并注册 systemd 服务；
+4. 已安装时备份 server 二进制和环境文件，迁移后重启服务，失败则回滚；
+5. 把 CLI 安装为 `/usr/local/bin/kairos`，并确认 `kairos-server.service` 正常运行。
+
+只生成构建目录、不修改系统：
+
+```bash
+bash ./build-ubuntu.sh --build-only
+```
+
+紧急构建时可以显式跳过测试：
+
+```bash
+bash ./build-ubuntu.sh --skip-tests
+```
+
+脚本需要 Go、`sudo` 和 systemd；构建过程本身不要求 root，只有安装或更新系统文件时才调用 `sudo`。`kairos-build/kairos.env` 含有生产凭据，不应复制到仓库、提交 Git 或放宽文件权限。
+
+### 手动构建与部署
+
 ```powershell
 cd server
 go build -trimpath -ldflags='-s -w' -o kairos-server.exe .\cmd\kairos-server

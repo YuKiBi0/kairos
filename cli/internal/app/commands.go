@@ -23,7 +23,6 @@ const cliVersion = "1.0.0"
 type options struct {
 	server, workspace, output   string
 	quiet, noColor, insecure    bool
-	allowEncryptedFile          bool
 	requestTimeout, waitTimeout time.Duration
 	out                         Output
 }
@@ -118,8 +117,6 @@ func parseGlobal(args []string) (options, []string, error) {
 			opts.noColor = true
 		case arg == "--insecure":
 			opts.insecure = true
-		case arg == "--allow-encrypted-file":
-			opts.allowEncryptedFile = true
 		case arg == "--server" || strings.HasPrefix(arg, "--server="):
 			v, err := value()
 			if err != nil {
@@ -186,8 +183,6 @@ func dispatch(opts options, args []string) error {
 		return runCommand(opts, args[1:])
 	case "runner":
 		return runnerCommand(opts, args[1:])
-	case "token":
-		return tokenCommand(opts, args[1:])
 	case "central":
 		return centralCommand(opts, args[1:])
 	default:
@@ -208,7 +203,7 @@ func usageError(err error) error {
 func printHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "kairos - Kairos 命令行客户端")
 	_, _ = fmt.Fprintln(w, "用法: kairos [全局参数] <命令>")
-	_, _ = fmt.Fprintln(w, "命令: server login logout whoami workspace task run runner token central version")
+	_, _ = fmt.Fprintln(w, "命令: server login logout whoami workspace task run runner central version")
 }
 func runtimePlatform() string {
 	if runtime.GOOS == "windows" {
@@ -430,7 +425,6 @@ func loginCommand(opts options, args []string) error {
 	if *password == "" {
 		*password = os.Getenv("KAIROS_PASSWORD")
 	}
-	allowEncryptedFile := opts.allowEncryptedFile
 	if *username == "" || *password == "" {
 		return usageError(errors.New("login 需要 --username 和 --password（或 KAIROS_USERNAME/KAIROS_PASSWORD）"))
 	}
@@ -451,7 +445,7 @@ func loginCommand(opts options, args []string) error {
 		return &CLIError{Code: "INVALID_RESPONSE", Message: "登录响应缺少令牌", ExitCode: ExitUnavailable}
 	}
 	expires, _ := response["expires_in"].(float64)
-	if err := SaveCredentials(name, Credentials{AccessToken: access, RefreshToken: refresh, ExpiresAt: time.Now().UTC().Add(time.Duration(expires) * time.Second).Format(time.RFC3339)}, allowEncryptedFile); err != nil {
+	if err := SaveCredentials(name, Credentials{AccessToken: access, RefreshToken: refresh, ExpiresAt: time.Now().UTC().Add(time.Duration(expires) * time.Second).Format(time.RFC3339)}); err != nil {
 		return err
 	}
 	return opts.out.JSON(map[string]any{"server": name, "user": response["user"], "expires_in": expires})
@@ -502,12 +496,27 @@ func authenticatedClient(opts options) (*APIClient, string, Config, error) {
 		return nil, "", config, err
 	}
 	credentials := Credentials{}
-	if token := os.Getenv("KAIROS_TOKEN"); token != "" {
+	if token := strings.TrimSpace(os.Getenv("KAIROS_TOKEN")); token != "" {
 		credentials.AccessToken = token
 	} else {
 		credentials, err = LoadCredentials(name)
 		if err != nil {
 			return nil, "", config, err
+		}
+		if credentialsNeedRefresh(credentials, time.Now().UTC()) {
+			refreshClient, clientErr := NewAPIClient(profile, "", opts.requestTimeout, opts.insecure)
+			if clientErr != nil {
+				return nil, "", config, clientErr
+			}
+			credentials, err = UpdateCredentials(name, func(current Credentials) (Credentials, error) {
+				if !credentialsNeedRefresh(current, time.Now().UTC()) {
+					return current, nil
+				}
+				return refreshCredentials(context.Background(), refreshClient, current)
+			})
+			if err != nil {
+				return nil, "", config, err
+			}
 		}
 	}
 	if credentials.AccessToken == "" {
@@ -517,21 +526,36 @@ func authenticatedClient(opts options) (*APIClient, string, Config, error) {
 	return client, name, config, err
 }
 
-func centralClient(opts options) (*APIClient, string, Config, error) {
-	config, err := LoadConfig()
+func credentialsNeedRefresh(credentials Credentials, now time.Time) bool {
+	if strings.TrimSpace(credentials.RefreshToken) == "" {
+		return false
+	}
+	if strings.TrimSpace(credentials.AccessToken) == "" {
+		return true
+	}
+	expiresAt, err := time.Parse(time.RFC3339, credentials.ExpiresAt)
+	return err != nil || !expiresAt.After(now.Add(30*time.Second))
+}
+
+func refreshCredentials(ctx context.Context, client *APIClient, current Credentials) (Credentials, error) {
+	if strings.TrimSpace(current.RefreshToken) == "" {
+		return Credentials{}, &CLIError{Code: "UNAUTHENTICATED", Message: "登录已失效，请重新运行 kairos login", ExitCode: ExitUnauth}
+	}
+	response, err := client.Post(ctx, "/api/v1/auth/refresh", map[string]string{"refresh_token": current.RefreshToken}, "")
 	if err != nil {
-		return nil, "", config, err
+		return Credentials{}, err
 	}
-	name, profile, err := resolveServer(config, opts.server)
-	if err != nil {
-		return nil, "", config, err
+	access, _ := response["access_token"].(string)
+	refresh, _ := response["refresh_token"].(string)
+	expires, _ := response["expires_in"].(float64)
+	if access == "" || refresh == "" || expires <= 0 {
+		return Credentials{}, &CLIError{Code: "INVALID_RESPONSE", Message: "刷新响应缺少令牌", ExitCode: ExitUnavailable}
 	}
-	token := strings.TrimSpace(os.Getenv("KAIROS_CENTRAL_TOKEN"))
-	if token == "" {
-		return nil, "", config, &CLIError{Code: "CENTRAL_TOKEN_REQUIRED", Message: "中央命令需要 KAIROS_CENTRAL_TOKEN（先用 L3 账号执行 token create）", ExitCode: ExitUnauth}
-	}
-	client, err := NewAPIClient(profile, token, opts.requestTimeout, opts.insecure)
-	return client, name, config, err
+	return Credentials{
+		AccessToken:  access,
+		RefreshToken: refresh,
+		ExpiresAt:    time.Now().UTC().Add(time.Duration(expires) * time.Second).Format(time.RFC3339),
+	}, nil
 }
 
 func centralCommand(opts options, args []string) error {
@@ -631,7 +655,7 @@ func centralCommand(opts options, args []string) error {
 	} else if fileKey := stringValue("idempotency_key"); fileKey == "" {
 		payload["idempotency_key"] = newKey("")
 	}
-	client, _, _, err := centralClient(opts)
+	client, _, _, err := authenticatedClient(opts)
 	if err != nil {
 		return err
 	}
@@ -1189,36 +1213,4 @@ func splitCSV(value string) []string {
 		}
 	}
 	return values
-}
-
-func tokenCommand(opts options, args []string) error {
-	client, _, _, err := authenticatedClient(opts)
-	if err != nil {
-		return err
-	}
-	if len(args) == 0 {
-		return usageError(errors.New("用法: token create|revoke"))
-	}
-	switch args[0] {
-	case "create":
-		fs := flag.NewFlagSet("token create", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		scope := fs.String("scope", "", "")
-		expires := fs.String("expires-in", "", "")
-		if err := fs.Parse(args[1:]); err != nil || *scope == "" || *expires == "" {
-			return usageError(errors.New("token create 需要 --scope 和 --expires-in"))
-		}
-		d, err := time.ParseDuration(*expires)
-		if err != nil || d <= 0 || d > 24*time.Hour {
-			return usageError(errors.New("expires-in 必须为正且不超过 24h"))
-		}
-		return v3Command(client, opts, "POST", "/api/v3/tokens", map[string]string{"scope": *scope, "expires_in": d.String()}, "")
-	case "revoke":
-		if len(args) != 2 {
-			return usageError(errors.New("用法: token revoke TOKEN_ID"))
-		}
-		return v3Command(client, opts, "POST", "/api/v3/tokens/"+args[1]+"/revoke", map[string]any{}, "")
-	default:
-		return usageError(errors.New("未知 token 子命令"))
-	}
 }

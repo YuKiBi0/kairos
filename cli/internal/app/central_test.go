@@ -36,13 +36,16 @@ func TestCentralCommandRejectsBothCreatorSelectors(t *testing.T) {
 func TestCentralCommandLoadsJSONFileAndSendsIdempotency(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("APPDATA", root)
-	t.Setenv("KAIROS_CENTRAL_TOKEN", "central-test-token")
+	t.Setenv("KAIROS_TOKEN", "l3-login-token")
 	var received struct {
 		Payload map[string]any
 		Key     string
 		Path    string
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer l3-login-token" {
+			t.Fatalf("central command did not use the logged-in token: %q", got)
+		}
 		received.Path = r.URL.Path
 		received.Key = r.Header.Get("Idempotency-Key")
 		if err := json.NewDecoder(r.Body).Decode(&received.Payload); err != nil {
@@ -73,15 +76,15 @@ func TestCentralCommandLoadsJSONFileAndSendsIdempotency(t *testing.T) {
 	if received.Payload["creator_username"] != "alice" || received.Payload["title"] != "来自文件" {
 		t.Fatalf("JSON file fields were not sent: %#v", received.Payload)
 	}
-	if strings.Contains(out.String(), "central-test-token") {
-		t.Fatal("central token leaked to output")
+	if strings.Contains(out.String(), "l3-login-token") {
+		t.Fatal("login token leaked to output")
 	}
 }
 
 func TestCentralCommandUsesGlobalWorkspaceFlag(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("APPDATA", root)
-	t.Setenv("KAIROS_CENTRAL_TOKEN", "central-test-token")
+	t.Setenv("KAIROS_TOKEN", "l3-login-token")
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
