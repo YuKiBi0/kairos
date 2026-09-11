@@ -3,127 +3,135 @@
 package app
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
-func encryptedCredentialPath() string { return filepath.Join(configDir(), "credentials.enc") }
-func credentialKey() ([]byte, error) {
-	raw := os.Getenv("KAIROS_CREDENTIAL_KEY")
-	if len(raw) < 16 {
-		return nil, errors.New("KAIROS_CREDENTIAL_KEY must contain at least 16 characters")
+func credentialPath() string     { return filepath.Join(configDir(), "credentials.json") }
+func credentialLockPath() string { return filepath.Join(configDir(), "credentials.lock") }
+
+func withCredentialLock(lock int, action func() error) error {
+	if err := os.MkdirAll(configDir(), 0o700); err != nil {
+		return err
 	}
-	sum := sha256.Sum256([]byte(raw))
-	return sum[:], nil
-}
-func credentialAEAD() (cipher.AEAD, error) {
-	key, err := credentialKey()
+	_ = os.Chmod(configDir(), 0o700)
+	file, err := os.OpenFile(credentialLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), lock); err != nil {
+		return err
 	}
-	return cipher.NewGCM(block)
+	defer func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN) }()
+	return action()
 }
 
 func loadAllCredentials() (map[string]Credentials, error) {
-	data, err := os.ReadFile(encryptedCredentialPath())
+	data, err := os.ReadFile(credentialPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]Credentials{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	aead, err := credentialAEAD()
-	if err != nil {
-		return nil, err
-	}
-	if len(data) < aead.NonceSize() {
-		return nil, errors.New("invalid encrypted credential file")
-	}
-	plain, err := aead.Open(nil, data[:aead.NonceSize()], data[aead.NonceSize():], nil)
-	if err != nil {
-		return nil, errors.New("cannot decrypt credential file")
-	}
+	_ = os.Chmod(credentialPath(), 0o600)
 	all := map[string]Credentials{}
-	if err := json.Unmarshal(plain, &all); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, fmt.Errorf("invalid credential file: %w", err)
 	}
 	return all, nil
 }
 
-func LoadCredentials(server string) (Credentials, error) {
-	all, err := loadAllCredentials()
-	if err != nil {
-		return Credentials{}, err
-	}
-	return all[server], nil
-}
-
-func SaveCredentials(server string, value Credentials, allowEncryptedFile bool) error {
-	if !allowEncryptedFile {
-		return errors.New("no OS keychain available; pass --allow-encrypted-file and set KAIROS_CREDENTIAL_KEY")
-	}
-	all, err := loadAllCredentials()
-	if err != nil {
-		return err
-	}
-	all[server] = value
-	plain, err := json.Marshal(all)
-	if err != nil {
-		return err
-	}
-	aead, err := credentialAEAD()
-	if err != nil {
-		return err
-	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return err
-	}
-	encrypted := aead.Seal(nonce, nonce, plain, nil)
-	if err := os.MkdirAll(configDir(), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(encryptedCredentialPath(), encrypted, 0o600)
-}
-
-func DeleteCredentials(server string) error {
-	if _, statErr := os.Stat(encryptedCredentialPath()); errors.Is(statErr, os.ErrNotExist) {
-		return nil
-	}
-	all, err := loadAllCredentials()
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	delete(all, server)
-	if len(all) == 0 {
-		return os.Remove(encryptedCredentialPath())
-	}
+func writeAllCredentials(all map[string]Credentials) error {
 	encoded, err := json.Marshal(all)
 	if err != nil {
 		return err
 	}
-	aead, err := credentialAEAD()
+	file, err := os.CreateTemp(configDir(), ".credentials-*.tmp")
 	if err != nil {
 		return err
 	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	temporary := file.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
 		return err
 	}
-	encrypted := aead.Seal(nonce, nonce, encoded, nil)
-	return os.WriteFile(encryptedCredentialPath(), encrypted, 0o600)
+	if _, err := file.Write(encoded); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary, credentialPath())
+}
+
+func LoadCredentials(server string) (value Credentials, err error) {
+	err = withCredentialLock(syscall.LOCK_SH, func() error {
+		all, loadErr := loadAllCredentials()
+		if loadErr != nil {
+			return loadErr
+		}
+		value = all[server]
+		return nil
+	})
+	return value, err
+}
+
+func SaveCredentials(server string, value Credentials) error {
+	return withCredentialLock(syscall.LOCK_EX, func() error {
+		all, err := loadAllCredentials()
+		if err != nil {
+			return err
+		}
+		all[server] = value
+		return writeAllCredentials(all)
+	})
+}
+
+func UpdateCredentials(server string, update func(Credentials) (Credentials, error)) (value Credentials, err error) {
+	err = withCredentialLock(syscall.LOCK_EX, func() error {
+		all, loadErr := loadAllCredentials()
+		if loadErr != nil {
+			return loadErr
+		}
+		current := all[server]
+		value, loadErr = update(current)
+		if loadErr != nil {
+			return loadErr
+		}
+		if value == current {
+			return nil
+		}
+		all[server] = value
+		return writeAllCredentials(all)
+	})
+	return value, err
+}
+
+func DeleteCredentials(server string) error {
+	return withCredentialLock(syscall.LOCK_EX, func() error {
+		all, err := loadAllCredentials()
+		if err != nil {
+			return err
+		}
+		delete(all, server)
+		if len(all) == 0 {
+			if err := os.Remove(credentialPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
+		}
+		return writeAllCredentials(all)
+	})
 }

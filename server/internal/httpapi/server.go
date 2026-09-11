@@ -135,9 +135,7 @@ func NewWithRedis(
 		})
 	})
 	router.Route("/api/v3", func(v3 chi.Router) {
-		v3.Use(api.authenticate)
-		v3.Post("/tokens", api.centralToken)
-		v3.Post("/central/tasks", api.centralTaskCreate)
+		v3.With(api.authenticate).Post("/central/tasks", api.centralTaskCreate)
 	})
 	return router
 }

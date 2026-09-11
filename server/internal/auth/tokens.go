@@ -20,8 +20,7 @@ type TokenManager struct {
 }
 
 type AccessClaims struct {
-	DeviceID string   `json:"device_id"`
-	Scopes   []string `json:"scopes,omitempty"`
+	DeviceID string `json:"device_id"`
 	jwt.RegisteredClaims
 }
 
@@ -35,26 +34,10 @@ func NewTokenManager(secret []byte, accessTTL time.Duration, issuer string) *Tok
 }
 
 func (m *TokenManager) IssueAccess(userID, deviceID uuid.UUID) (string, time.Time, error) {
-	return m.IssueAccessWithScopes(userID, deviceID, nil)
-}
-
-func (m *TokenManager) IssueAccessWithScopes(userID, deviceID uuid.UUID, scopes []string) (string, time.Time, error) {
-	return m.issueAccess(userID, deviceID, scopes, m.accessTTL)
-}
-
-func (m *TokenManager) IssueAccessWithScopesTTL(userID, deviceID uuid.UUID, scopes []string, ttl time.Duration) (string, time.Time, error) {
-	if ttl <= 0 {
-		return "", time.Time{}, errors.New("token ttl must be positive")
-	}
-	return m.issueAccess(userID, deviceID, scopes, ttl)
-}
-
-func (m *TokenManager) issueAccess(userID, deviceID uuid.UUID, scopes []string, ttl time.Duration) (string, time.Time, error) {
 	now := m.clock().UTC()
-	expiresAt := now.Add(ttl)
+	expiresAt := now.Add(m.accessTTL)
 	claims := AccessClaims{
 		DeviceID: deviceID.String(),
-		Scopes:   append([]string(nil), scopes...),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   userID.String(),
@@ -72,11 +55,6 @@ func (m *TokenManager) issueAccess(userID, deviceID uuid.UUID, scopes []string, 
 }
 
 func (m *TokenManager) ParseAccess(raw string) (uuid.UUID, uuid.UUID, error) {
-	userID, deviceID, _, err := m.ParseAccessWithScopes(raw)
-	return userID, deviceID, err
-}
-
-func (m *TokenManager) ParseAccessWithScopes(raw string) (uuid.UUID, uuid.UUID, []string, error) {
 	claims := new(AccessClaims)
 	token, err := jwt.ParseWithClaims(
 		raw,
@@ -91,17 +69,17 @@ func (m *TokenManager) ParseAccessWithScopes(raw string) (uuid.UUID, uuid.UUID, 
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil || !token.Valid {
-		return uuid.Nil, uuid.Nil, nil, errors.New("invalid access token")
+		return uuid.Nil, uuid.Nil, errors.New("invalid access token")
 	}
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
-		return uuid.Nil, uuid.Nil, nil, errors.New("invalid access token subject")
+		return uuid.Nil, uuid.Nil, errors.New("invalid access token subject")
 	}
 	deviceID, err := uuid.Parse(claims.DeviceID)
 	if err != nil {
-		return uuid.Nil, uuid.Nil, nil, errors.New("invalid access token device")
+		return uuid.Nil, uuid.Nil, errors.New("invalid access token device")
 	}
-	return userID, deviceID, append([]string(nil), claims.Scopes...), nil
+	return userID, deviceID, nil
 }
 
 func NewRefreshToken() (raw string, hash []byte, err error) {

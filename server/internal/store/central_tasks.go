@@ -14,7 +14,6 @@ import (
 
 var (
 	ErrCentralForbidden           = errors.New("central delegation is forbidden")
-	ErrCentralScopeRequired       = errors.New("central delegation scope is required")
 	ErrCentralTargetNotMember     = errors.New("target user is not an active group member")
 	ErrCentralWorkspace           = errors.New("workspace does not belong to group")
 	ErrCentralGroupArchived       = errors.New("group is archived")
