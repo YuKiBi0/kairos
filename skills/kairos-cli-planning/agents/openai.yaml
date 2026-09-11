@@ -1,0 +1,7 @@
+interface:
+  display_name: "Kairos 计划管理"
+  short_description: "使用 Kairos CLI 创建和维护计划任务工作流"
+  default_prompt: "Use $kairos-cli-planning to turn this planning request into Kairos tasks."
+
+policy:
+  allow_implicit_invocation: true
