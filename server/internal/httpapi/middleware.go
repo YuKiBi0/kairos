@@ -101,7 +101,7 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
 			return
 		}
-		userID, deviceID, scopes, err := a.tokens.ParseAccessWithScopes(strings.TrimSpace(header[7:]))
+		userID, deviceID, err := a.tokens.ParseAccess(strings.TrimSpace(header[7:]))
 		if err != nil {
 			writeError(w, r, http.StatusUnauthorized, "AUTH_EXPIRED", "请重新登录同步服务")
 			return
@@ -112,7 +112,6 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		ctx = context.WithValue(ctx, deviceIDKey, deviceID)
-		ctx = context.WithValue(ctx, scopesKey, scopes)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

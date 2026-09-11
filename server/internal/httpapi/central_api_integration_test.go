@@ -102,37 +102,29 @@ func TestCentralTaskDelegationAuthorizationOwnershipIdempotencyAndAudit(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	targetDevice, err := database.UpsertDevice(ctx, target.ID, nil, "central-l1-test", "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetToken, _, err := tokens.IssueAccess(target.ID, targetDevice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := New(database, config.Config{SessionSecret: secret, AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour}, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	status, body := requestAPI(t, http.MethodPost, server.URL+"/api/v3/tokens", regularToken, map[string]string{"scope": "task:read"})
-	if status != http.StatusBadRequest || !containsJSON(body, `UNSUPPORTED_SCOPE`) {
-		t.Fatalf("token endpoint should reject unsupported scope: status=%d body=%s", status, body)
-	}
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/tokens", regularToken, map[string]string{"scope": "central:tasks:create", "expires_in": "2h"})
-	if status != http.StatusCreated {
-		t.Fatalf("central token issuance failed: status=%d body=%s", status, body)
-	}
-	var tokenResponse map[string]any
-	if err := json.Unmarshal(body, &tokenResponse); err != nil {
-		t.Fatal(err)
-	}
-	centralToken, ok := tokenResponse["access_token"].(string)
-	if !ok || centralToken == "" {
-		t.Fatalf("central token response missing access_token: %#v", tokenResponse)
-	}
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/tokens", centralToken, map[string]string{"scope": "central:tasks:create"})
-	if status != http.StatusForbidden || !containsJSON(body, `FORBIDDEN_SCOPE`) {
-		t.Fatalf("central token must not mint another central token: status=%d body=%s", status, body)
+	status, body := requestAPI(t, http.MethodPost, server.URL+"/api/v3/tokens", regularToken, map[string]string{"scope": "central:tasks:create"})
+	if status != http.StatusNotFound {
+		t.Fatalf("removed central token endpoint should return 404: status=%d body=%s", status, body)
 	}
 	payload := map[string]any{
 		"group_id": group.ID, "workspace_id": group.WorkspaceID, "creator_user_id": target.ID,
 		"title": "delegated task", "description": "created by central agent", "source_agent_id": "agent-1",
 		"idempotency_key": uuid.New(),
 	}
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", regularToken, payload)
-	if status != http.StatusForbidden {
-		t.Fatalf("regular token should be denied, got %d", status)
+	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", targetToken, payload)
+	if status != http.StatusForbidden || !containsJSON(body, `FORBIDDEN_ROLE`) {
+		t.Fatalf("non-L3 login should be denied: status=%d body=%s", status, body)
 	}
 	nonMemberPayload := map[string]any{}
 	for key, value := range payload {
@@ -140,7 +132,7 @@ func TestCentralTaskDelegationAuthorizationOwnershipIdempotencyAndAudit(t *testi
 	}
 	nonMemberPayload["creator_user_id"] = outsider.ID
 	nonMemberPayload["idempotency_key"] = uuid.New()
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", centralToken, nonMemberPayload)
+	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", regularToken, nonMemberPayload)
 	if status != http.StatusForbidden || !containsJSON(body, `TARGET_NOT_GROUP_MEMBER`) {
 		t.Fatalf("non-member target should be rejected: status=%d body=%s", status, body)
 	}
@@ -154,11 +146,11 @@ func TestCentralTaskDelegationAuthorizationOwnershipIdempotencyAndAudit(t *testi
 	}
 	personalPayload["workspace_id"] = personal.ID
 	personalPayload["idempotency_key"] = uuid.New()
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", centralToken, personalPayload)
+	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", regularToken, personalPayload)
 	if status != http.StatusBadRequest || !containsJSON(body, `WORKSPACE_GROUP_MISMATCH`) {
 		t.Fatalf("personal workspace should be rejected: status=%d body=%s", status, body)
 	}
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", centralToken, payload)
+	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", regularToken, payload)
 	if status != http.StatusCreated {
 		t.Fatalf("central task create failed: status=%d body=%s", status, body)
 	}
@@ -173,7 +165,7 @@ func TestCentralTaskDelegationAuthorizationOwnershipIdempotencyAndAudit(t *testi
 	if _, exists := task["user_id"]; exists {
 		t.Fatal("central task response must not expose internal user_id")
 	}
-	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", centralToken, payload)
+	status, body = requestAPI(t, http.MethodPost, server.URL+"/api/v3/central/tasks", regularToken, payload)
 	if status != http.StatusOK || !containsJSON(body, `"duplicate":true`) {
 		t.Fatalf("idempotent retry failed: status=%d body=%s", status, body)
 	}

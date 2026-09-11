@@ -4,41 +4,20 @@
 
 ## 安全模型
 
-1. 先使用普通 L3 登录访问令牌调用 `POST /api/v3/tokens`，申请 `central:tasks:create`。
-2. 服务端只接受这个精确 scope，最长有效期 24 小时；中央令牌不能继续签发令牌。
-3. 调用中央任务接口时，服务端重新校验 JWT、对应设备未撤销、当前账号仍是 L3，以及目标成员、群组和工作空间关系。
-4. 请求中的 `creator_user_id` 只表示任务归属成员，不会改变真实认证操作者。服务端写入：
+1. 使用 `POST /api/v1/auth/login` 登录服务器 L3 账号；中央 CLI 与普通 CLI 共享这份登录会话。
+2. CLI 在当前系统用户的凭据存储中保存 access/refresh token，并在 access token 临期时自动续期，因此同一服务器用户的新终端可以复用登录态。
+3. 调用中央任务接口时，服务端重新校验登录令牌、对应设备未撤销、当前账号仍是 L3，以及目标成员、群组和工作空间关系。
+4. 不提供中央令牌签发接口，也不需要中央 scope 或单独注入中央凭据。
+5. 请求中的 `creator_user_id` 只表示任务归属成员，不会改变真实认证操作者。服务端写入：
    - `tasks.user_id`：目标成员；
    - `tasks.created_by_user_id`：目标成员；
    - `tasks.last_operated_by_user_id`：中央操作者。
-
-## 签发中央令牌
-
-```http
-POST /api/v3/tokens
-Authorization: Bearer <L3 access token>
-Content-Type: application/json
-
-{"scope":"central:tasks:create","expires_in":"2h"}
-```
-
-成功返回 `201`：
-
-```json
-{
-  "access_token": "<short-lived JWT>",
-  "expires_at": "2026-09-04T12:00:00Z",
-  "scope": "central:tasks:create"
-}
-```
-
-令牌只在响应中返回一次。不要将其写入配置文件或日志；中央 CLI 使用 `KAIROS_CENTRAL_TOKEN` 注入。
 
 ## 创建委派任务
 
 ```http
 POST /api/v3/central/tasks
-Authorization: Bearer <central token>
+Authorization: Bearer <L3 login access token>
 Idempotency-Key: 44444444-4444-4444-4444-444444444444
 Content-Type: application/json
 
@@ -80,9 +59,8 @@ Content-Type: application/json
 | ---: | --- | --- |
 | 400 | `VALIDATION_ERROR` | UUID、标题、优先级或幂等键无效 |
 | 400 | `WORKSPACE_GROUP_MISMATCH` | 工作空间不是指定群组工作空间 |
-| 400 | `UNSUPPORTED_SCOPE` | 申请了非中央委派 scope |
 | 401 | `UNAUTHORIZED` | 令牌无效、过期或设备已撤销 |
-| 403 | `FORBIDDEN_SCOPE` | 非 L3、普通令牌或缺少中央 scope |
+| 403 | `FORBIDDEN_ROLE` | 当前登录账号不是 L3 |
 | 403 | `TARGET_NOT_GROUP_MEMBER` | 目标账号未绑定、已解绑、已禁用或不属于群组 |
 | 409 | `GROUP_ARCHIVED` | 归档群组不能创建新任务 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 幂等键已被其他中央操作者使用 |

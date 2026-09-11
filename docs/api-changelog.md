@@ -2,7 +2,7 @@
 
 ## API v3 / 中央委派
 
-- 新增 `POST /api/v3/tokens`，仅 L3 可签发精确 `central:tasks:create` scope 的短期中央令牌。
+- 中央 CLI 直接复用 L3 普通登录会话；移除 `POST /api/v3/tokens` 及中央 scope/委派令牌。
 - 新增 `POST /api/v3/central/tasks`，在群组工作空间内为指定有效成员创建任务；服务端不信任客户端伪造的身份字段。
 - 中央任务写入目标成员的所有者/创建者字段，中央操作者写入最后操作字段；成功和失败均接入 `central.task.create` 审计。
 - 中央任务创建使用 UUID 幂等键和事务级并发锁，重复请求不会产生第二条任务。
