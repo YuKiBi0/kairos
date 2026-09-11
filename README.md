@@ -73,6 +73,39 @@ flutter pub get
 flutter run -d windows
 ```
 
+### 5. 使用 Kairos CLI
+
+CLI 位于 `cli/`，与 Flutter 客户端和服务端分别使用独立 Go 模块。构建单文件二进制：
+
+```powershell
+cd cli
+go build -o kairos.exe .\cmd\kairos
+```
+
+首次使用：
+
+```text
+kairos server add prod --url https://kairos.example.com
+kairos login --server prod --username USER --password PASSWORD
+kairos workspace list
+kairos task list --output json
+```
+
+服务器内的中央 Agent 可由 L3 账号签发短期委派令牌，再为指定群组成员创建任务：
+
+```text
+kairos token create --scope central:tasks:create --expires-in 2h
+# PowerShell
+$env:KAIROS_CENTRAL_TOKEN = "服务端返回的令牌"
+# Bash
+export KAIROS_CENTRAL_TOKEN='服务端返回的令牌'
+kairos central task create --group GROUP_ID --workspace WORKSPACE_ID --creator-user USER_ID --title "任务标题"
+```
+
+中央委派的完整参数、权限边界、幂等重试和排障说明见 [CLI README](cli/README.md) 的“中央委派 CLI”章节。
+
+CLI 的配置、凭据和 API/退出码约定见 [Kairos CLI PRD](docs/kairos-cli-prd.md) 与 [CLI README](cli/README.md)。
+
 客户端服务地址在设置中配置。公网部署必须使用 HTTPS/WSS；局域网明文 HTTP/WS 只适合开发和明确确认过风险的环境。
 
 ## 工程文档
@@ -83,6 +116,7 @@ flutter run -d windows
 - [测试与质量门禁](docs/testing.md)
 - [API v1](docs/api.md)
 - [API v2：群组、工作空间与 KairosAdmin](docs/api-v2.md)
+- [API v3：中央委派](docs/api-v3.md)
 - [API 变更记录](docs/api-changelog.md)
 - [Kairos CLI 产品需求与开发 PRD](docs/kairos-cli-prd.md)
 - [MVP 2.0 产品与技术基线](docs/mvp-2.0-spec.md)
