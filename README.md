@@ -104,6 +104,8 @@ kairos central task create --group GROUP_ID --workspace WORKSPACE_ID --creator-u
 
 CLI 的配置、凭据和 API/退出码约定见 [Kairos CLI PRD](docs/kairos-cli-prd.md) 与 [CLI README](cli/README.md)。
 
+Ubuntu 服务器可在仓库根目录运行 `bash ./build-ubuntu.sh`，自动将 server、CLI、迁移和环境文件放到上级目录 `kairos-build`，随后安装或更新 systemd 服务与系统级 CLI。首次使用需要按提示补全 `kairos-build/kairos.env` 中的数据库地址，完整说明见 [部署文档](docs/deployment.md)。
+
 客户端服务地址在设置中配置。公网部署必须使用 HTTPS/WSS；局域网明文 HTTP/WS 只适合开发和明确确认过风险的环境。
 
 ## 工程文档
