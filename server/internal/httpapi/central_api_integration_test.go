@@ -195,7 +195,7 @@ func TestCentralTaskDelegationAuthorizationOwnershipIdempotencyAndAudit(t *testi
 		t.Fatalf("unexpected task identity: owner=%s creator=%s operator=%s", owner, creator, operator)
 	}
 	var auditDetails []byte
-	if err := connection.QueryRow(ctx, `SELECT details FROM audit_events WHERE group_id=$1 AND action='central.task.create' AND target_id=(SELECT id FROM tasks WHERE workspace_id=$1 AND title='delegated task')`, group.ID).Scan(&auditDetails); err != nil {
+	if err := connection.QueryRow(ctx, `SELECT details FROM audit_events WHERE group_id=$1 AND action='central.task.create' AND target_id=(SELECT id FROM tasks WHERE workspace_id=$2 AND title='delegated task')`, group.ID, group.WorkspaceID).Scan(&auditDetails); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestCentralTaskDelegationAuthorizationOwnershipIdempotencyAndAudit(t *testi
 		_ = connection.Close(ctx)
 		t.Fatalf("audit details missing delegation context: %s", auditDetails)
 	}
-	if err := connection.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE group_id=$1 AND action='central.task.create' AND target_id=(SELECT id FROM tasks WHERE workspace_id=$1 AND title='delegated task')`, group.ID).Scan(&auditCount); err != nil {
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE group_id=$1 AND action='central.task.create' AND target_id=(SELECT id FROM tasks WHERE workspace_id=$2 AND title='delegated task')`, group.ID, group.WorkspaceID).Scan(&auditCount); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatal(err)
 	}
