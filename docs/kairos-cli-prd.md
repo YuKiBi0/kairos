@@ -165,7 +165,7 @@ servers:
 
 `verify_tls` 只对 HTTPS/WSS 生效；生产 Profile 必须使用 HTTPS/WSS 并保持为 `true`。配置优先级：命令行参数 > 环境变量 > 当前服务 Profile > 配置文件默认值。本文中的“Profile”仅指 `servers.<name>` 下的一条服务配置，不是独立的第二种配置对象；因此不再提供 `--profile` 参数，统一使用 `--server NAME`。支持的环境变量包括 `KAIROS_SERVER_URL`、`KAIROS_TOKEN`、`KAIROS_WORKSPACE`、`KAIROS_OUTPUT`、`KAIROS_REQUEST_TIMEOUT` 和 `KAIROS_WAIT_TIMEOUT`。凭据脱敏、存储和日志规则以 9.2 为唯一权威来源。
 
-凭据存储使用独立的本地凭据存储，不与普通 YAML 配置混用：优先使用 OS Keychain/Credential Manager；无可用密钥环时，默认拒绝保存凭据，仅在显式传入 `--allow-encrypted-file` 后使用由 OS 数据保护 API 加密的凭据文件。Unix 凭据文件权限为 `0600`，Windows 使用当前用户 ACL；“受保护文件”指加密文件，不是仅依赖文件权限的明文文件。
+凭据存储使用独立的本地凭据存储，不与普通 YAML 配置混用：Windows 使用 Credential Manager；Unix 使用当前系统用户专属的 `credentials.json`，目录权限为 `0700`、文件与锁文件权限为 `0600`。Unix 不要求外部加密密钥或额外登录参数。CLI 在 access token 临期时使用持久化 refresh token 自动续期，并用跨进程文件锁串行化续期，使同一服务器用户的多个终端共享登录态。
 
 ### 6.3 服务地址命令
 
@@ -184,9 +184,9 @@ servers:
 - `kairos login` 支持浏览器设备码登录；无浏览器环境支持一次性用户码或显式 Token 输入。
 - `kairos logout` 撤销本地凭据，并可通过 `--all` 撤销服务端会话。
 - `kairos whoami` 显示当前账号、服务地址、全局角色和按工作空间列出的角色；不使用单一“当前角色”字段。
-- 支持个人 Token、CI 短期 Token 和 Runner Token 三类凭据；Token 需包含作用域、签发时间、过期时间和撤销状态。凭据安全规则统一见 9.2。
-- CLI 在收到 `401` 时只提示重新登录，不自动打印请求头或 Token。
-- `kairos token create --scope SCOPE --expires-in DURATION` 创建短期 Token。中央委派使用已定案的 `central:tasks:create` scope 和 `KAIROS_CENTRAL_TOKEN`；其他 CI scope 需由对应的 Token 服务实现。Token 最长 24 小时且只在创建响应中显示一次，CLI 不将 Token 写入配置或日志。
+- 支持普通登录会话、显式注入的 `KAIROS_TOKEN` 和 Runner Token。凭据安全规则统一见 9.2。
+- CLI 自动刷新本地持久化的登录会话；refresh token 无效或服务端撤销设备后提示重新登录，且不会打印请求头或 Token。
+- 不提供中央 Token 签发命令；`kairos central` 直接复用当前 L3 登录态。CI 如需显式 Token，可通过部署环境注入 `KAIROS_TOKEN`，CLI 不将该环境变量写入磁盘或日志。
 
 ### 7.2 工作空间
 
@@ -224,18 +224,16 @@ servers:
 
 ### 7.3.1 中央委派任务创建（已定案）
 
-服务器内的中央 CLI/Agent 可使用 L3 账号签发的短期 `central:tasks:create` Token，在指定群组工作空间中为另一名有效群组成员创建任务。该能力必须使用独立命令 `kairos central task create` 和 `/api/v3/central/tasks`，不得通过普通同步操作伪造 `user_id` 或 `created_by_user_id`。
+服务器内的中央 CLI/Agent 可直接使用 L3 账号的普通登录会话，在指定群组工作空间中为另一名有效群组成员创建任务。该能力必须使用独立命令 `kairos central task create` 和 `/api/v3/central/tasks`，不得通过普通同步操作伪造 `user_id` 或 `created_by_user_id`。
 
-服务端在事务中重新校验：Token scope、当前 L3 角色、Token 对应设备未撤销、群组与工作空间的一致性、群组未归档、目标用户启用且属于群组并绑定有效群组账号。个人工作空间永远不允许中央委派。成功任务的 `tasks.user_id` 与 `tasks.created_by_user_id` 均为目标用户，`tasks.last_operated_by_user_id` 为中央操作者；`source_agent_id` 只用于审计和后续路由，不构成权限提升。
+服务端在处理请求及事务中重新校验：当前 L3 角色、登录令牌对应设备未撤销、群组与工作空间的一致性、群组未归档、目标用户启用且属于群组并绑定有效群组账号。个人工作空间永远不允许中央委派。成功任务的 `tasks.user_id` 与 `tasks.created_by_user_id` 均为目标用户，`tasks.last_operated_by_user_id` 为中央操作者；`source_agent_id` 只用于审计和后续路由，不构成权限提升。
 
-中央 Token 由 `POST /api/v3/tokens` 签发，最长 24 小时且只允许 `central:tasks:create` scope。每个创建请求必须携带 UUID 幂等键；服务端以事务锁和 `sync_operations` 保证并发重试只创建一条任务。审计事件 `central.task.create` 至少包含中央操作者、目标用户、群组、工作空间、Agent ID、请求 ID、幂等键和成功/失败结果。L1/L2、无 scope 的 L3 Token、已解绑/禁用成员和跨群组工作空间请求均返回结构化错误。
+服务端不提供中央 Token 签发接口。每个创建请求必须携带 UUID 幂等键；服务端以事务锁和 `sync_operations` 保证并发重试只创建一条任务。审计事件 `central.task.create` 至少包含中央操作者、目标用户、群组、工作空间、Agent ID、请求 ID、幂等键和成功/失败结果。L1/L2、已解绑/禁用成员和跨群组工作空间请求均返回结构化错误。
 
 示例：
 
 ```text
-kairos token create --scope central:tasks:create --expires-in 2h
-# PowerShell: $env:KAIROS_CENTRAL_TOKEN = "<access_token>"
-# Bash: export KAIROS_CENTRAL_TOKEN='<access_token>'
+kairos login --server prod --username super-admin --password PASSWORD
 kairos central task create --group GROUP_ID --workspace WORKSPACE_ID \
   --creator-user USER_ID --title "中央 Agent 创建的任务" --agent backup-agent
 ```

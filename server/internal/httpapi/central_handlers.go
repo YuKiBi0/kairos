@@ -5,75 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/YuKiBi0/kairos/server/internal/store"
 	"github.com/google/uuid"
 )
-
-type centralTokenRequest struct {
-	ExpiresIn string `json:"expires_in"`
-	Scope     string `json:"scope"`
-}
-
-func (a *API) centralToken(w http.ResponseWriter, r *http.Request) {
-	actorID, deviceID, ok := identity(r.Context())
-	if !ok {
-		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
-		return
-	}
-	role, err := a.store.AdminRole(r.Context(), actorID)
-	if err != nil || role != "L3" {
-		writeError(w, r, http.StatusForbidden, "FORBIDDEN_SCOPE", "只有 L3 可以签发中央委派令牌")
-		return
-	}
-	if _, err := a.store.DeviceByID(r.Context(), actorID, deviceID); err != nil {
-		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "登录设备已撤销或不存在")
-		return
-	}
-	if hasScope(r.Context(), "central:tasks:create") {
-		writeError(w, r, http.StatusForbidden, "FORBIDDEN_SCOPE", "中央委派令牌不能继续签发中央令牌")
-		return
-	}
-	var request centralTokenRequest
-	if !decodeJSON(w, r, &request) {
-		return
-	}
-	ttl := 15 * time.Minute
-	if strings.TrimSpace(request.ExpiresIn) != "" {
-		ttl, err = time.ParseDuration(request.ExpiresIn)
-		if err != nil || ttl <= 0 || ttl > 24*time.Hour {
-			writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "expires_in 必须为正且不超过 24h")
-			return
-		}
-	}
-	scope := strings.TrimSpace(request.Scope)
-	if scope == "" {
-		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "scope 不能为空")
-		return
-	}
-	scopes := make([]string, 0, 2)
-	for _, value := range strings.Split(scope, ",") {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			scopes = append(scopes, value)
-		}
-	}
-	if len(scopes) == 0 {
-		writeError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "scope 不能为空")
-		return
-	}
-	if len(scopes) != 1 || scopes[0] != "central:tasks:create" {
-		writeError(w, r, http.StatusBadRequest, "UNSUPPORTED_SCOPE", "中央令牌只允许 central:tasks:create scope")
-		return
-	}
-	token, expiry, err := a.tokens.IssueAccessWithScopesTTL(actorID, deviceID, scopes, ttl)
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "TOKEN_ERROR", "无法签发中央令牌")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"access_token": token, "expires_at": expiry, "scope": strings.Join(scopes, ",")})
-}
 
 type centralTaskRequest struct {
 	WorkspaceID     string  `json:"workspace_id"`
@@ -93,12 +28,13 @@ func (a *API) centralTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "需要登录")
 		return
 	}
-	if !hasScope(r.Context(), "central:tasks:create") {
-		writeError(w, r, http.StatusForbidden, "FORBIDDEN_SCOPE", "需要 central:tasks:create 委派权限")
+	role, err := a.store.AdminRole(r.Context(), actorID)
+	if err != nil || role != "L3" {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN_ROLE", "中央 CLI 仅允许 L3 账号使用")
 		return
 	}
 	if _, err := a.store.DeviceByID(r.Context(), actorID, deviceID); err != nil {
-		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "中央令牌设备已撤销或不存在")
+		writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "登录设备已撤销或不存在")
 		return
 	}
 	var request centralTaskRequest
@@ -150,8 +86,8 @@ func (a *API) centralTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status, code, message := http.StatusInternalServerError, "DATABASE_ERROR", "无法创建中央任务"
 		switch {
-		case errors.Is(err, store.ErrCentralForbidden), errors.Is(err, store.ErrCentralScopeRequired):
-			status, code, message = http.StatusForbidden, "FORBIDDEN_SCOPE", "中央委派权限不足"
+		case errors.Is(err, store.ErrCentralForbidden):
+			status, code, message = http.StatusForbidden, "FORBIDDEN_ROLE", "中央 CLI 仅允许 L3 账号使用"
 		case errors.Is(err, store.ErrCentralTargetNotMember):
 			status, code, message = http.StatusForbidden, "TARGET_NOT_GROUP_MEMBER", "目标用户不是该群组的有效成员"
 		case errors.Is(err, store.ErrCentralWorkspace):

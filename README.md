@@ -91,16 +91,14 @@ kairos workspace list
 kairos task list --output json
 ```
 
-服务器内的中央 Agent 可由 L3 账号签发短期委派令牌，再为指定群组成员创建任务：
+服务器内的中央 Agent 直接登录 L3 账号，即可为指定群组成员创建任务：
 
 ```text
-kairos token create --scope central:tasks:create --expires-in 2h
-# PowerShell
-$env:KAIROS_CENTRAL_TOKEN = "服务端返回的令牌"
-# Bash
-export KAIROS_CENTRAL_TOKEN='服务端返回的令牌'
+kairos login --server prod --username super-admin --password PASSWORD
 kairos central task create --group GROUP_ID --workspace WORKSPACE_ID --creator-user USER_ID --title "任务标题"
 ```
+
+登录态保存在当前系统用户的凭据存储中，并通过 refresh token 自动续期；服务器上的新终端会复用同一登录态，无需签发或注入中央密钥。
 
 中央委派的完整参数、权限边界、幂等重试和排障说明见 [CLI README](cli/README.md) 的“中央委派 CLI”章节。
 
