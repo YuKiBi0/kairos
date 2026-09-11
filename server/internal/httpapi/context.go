@@ -12,6 +12,7 @@ const (
 	requestIDKey contextKey = "request_id"
 	userIDKey    contextKey = "user_id"
 	deviceIDKey  contextKey = "device_id"
+	scopesKey    contextKey = "scopes"
 )
 
 func requestID(ctx context.Context) string {
@@ -23,4 +24,14 @@ func identity(ctx context.Context) (uuid.UUID, uuid.UUID, bool) {
 	userID, userOK := ctx.Value(userIDKey).(uuid.UUID)
 	deviceID, deviceOK := ctx.Value(deviceIDKey).(uuid.UUID)
 	return userID, deviceID, userOK && deviceOK
+}
+
+func hasScope(ctx context.Context, scope string) bool {
+	values, _ := ctx.Value(scopesKey).([]string)
+	for _, value := range values {
+		if value == scope {
+			return true
+		}
+	}
+	return false
 }
